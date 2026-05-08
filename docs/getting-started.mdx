@@ -33,7 +33,7 @@ uSpec connects an AI coding agent to Figma through an MCP (Model Context Protoco
 **Component Markdown path.** A single `.md` spec is written to disk. You need two pieces:
 
 1. **AI agent host** (same as above)
-2. **uSpec Extract Figma plugin**: replaces the MCP + template library requirement. Either install from [Figma Community](https://www.figma.com/community/plugin/1627610958749858141), or — if you prefer the latest source — clone the uSpec repo and build it locally from `figma-plugin/`. The [Component Markdown install guide](/specs/component-md#what-you-need) walks through both options.
+2. **uSpec Extract Figma plugin**: replaces the MCP + template library requirement. Clone the uSpec repo and build the plugin locally from `figma-plugin/`, then import the manifest in Figma Desktop. The [Component Markdown install guide](/specs/component-md#what-you-need) walks through every step.
 
 For the Component Markdown path, follow the [agent host setup below](#1-set-up-your-agent-host), then jump to the [Component Markdown install and usage guide](/specs/component-md).
 
@@ -456,7 +456,7 @@ Before running a skill, confirm your setup is complete for the path you want to 
 **Component Markdown path:**
 
 1. Your agent host is open in the project where you ran `npx uspec-skills init` and skills are available
-2. The **uSpec Extract** Figma plugin is installed (from Figma Community or via local dev install)
+2. The **uSpec Extract** Figma plugin is built locally from `figma-plugin/` and imported into Figma Desktop (see the [Component Markdown install guide](/specs/component-md#what-you-need))
 3. You have a `_base.json` file produced by running the plugin on a component
 
 ### Example prompt: Figma-native path
