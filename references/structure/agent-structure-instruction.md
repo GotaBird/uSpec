@@ -165,6 +165,25 @@ When inspecting values, check if they're bound to variables:
 | Plain number (e.g., `16`) | Hardcoded | `"16"` — just the number, no units |
 | Mixed values in component set | Different per variant | Document each variant's value in the appropriate column |
 
+### Canvas Measurements
+
+The standalone `create-structure` skill draws native Figma measurement overlays on each section's preview instances via `figma.currentPage.addMeasurement(...)` (Plugin API, available in Dev Mode — both `figma-console` and `figma-mcp` run in Dev Mode, so the same JS works in both). The full mechanism is documented in the SKILL workflow (Step 11a "Build the annotation plan" + Step 11c annotation block); this subsection summarises the contract so the agent knows what to expect.
+
+**Allowlist (the only properties that can be annotated):** padding (the four sides — `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd`), gap / `itemSpacing` (between consecutive auto-layout siblings), and min / max width / height (single-axis overlay on the node itself). Nothing else. `cornerRadius`, `borderWidth`, fixed widths/heights, sizing modes, alignments, typography, icon refs, and group headers stay in the table only.
+
+**Same-axis pairs only:** every measurement is L↔L, R↔R, T↔T, B↔B for paddings, or RIGHT↔LEFT / BOTTOM↔TOP for the gap-pair walks. Never mixed-axis.
+
+**`freeText` policy:**
+- Token-bound row → `freeText` shows the token name on the line (e.g. `spacing-md`); the table beside it shows the resolved value.
+- Hardcoded row → no `freeText`; Figma's default numeric label shows through (the measured pixel value).
+- Min / max constraints → `freeText: "min N"` / `"max N"` so the line distinguishes a constraint from the actual measured size.
+
+**Annotation scope:**
+- `rootOnly` for variant / density / shape / composition / behavior / state-conditional / boolean-toggled sections (the table documents the root container's own auto-layout settings).
+- `fullTree` for `subComponent` and `slotContent` sections (the table documents the inst's internal structure, including the SLOT node itself for `slotContent` because the preferred component is nested inside the actual slot). Recursion stops at nested INSTANCE boundaries — those have their own spec sections.
+
+**Verification caveat:** measurements are a canvas overlay, NOT part of the rendered node tree. They do **not** appear in `figma_take_screenshot` / `get_screenshot` output. Verify by comparing the `measurementCount` and `plannedColumns` returned by Step 11c — never by screenshot.
+
 ### Typography (Composite Model)
 
 The extraction returns typography as a discriminated composite — never both a style name and inline props:

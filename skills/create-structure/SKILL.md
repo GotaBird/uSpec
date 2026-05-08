@@ -1235,23 +1235,53 @@ Before rendering, determine the preview configuration for the current section. T
 
 **Preview parameter decision table:**
 
-| Section type | `SUB_COMP_SET_ID` | `VARIANT_AXIS` | `COLUMN_VALUES` | `PROPERTY_OVERRIDES` | `SUB_COMP_OVERRIDES` |
-|---|---|---|---|---|---|
-| **Size/variant** (columns are size names like Large, Medium, Small) | `''` | The axis name (e.g., `"Size"`) | Size names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` |
-| **Density** (columns are density modes from variable collections) | `''` | `''` | Mode names (e.g., `["Compact", "Default", "Spacious"]`) | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` |
-| **Shape** (columns are shape variants) | `''` | The axis name (e.g., `"Shape"`) | Shape names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` |
-| **Sub-component** (columns are size names showing a specific child) | The sub-component's own component set ID (from `subComponents[].subCompSetId` in Step 4b extraction) | The sub-component's size axis name (from `subComponents[].subCompVariantAxes`) | Size names from the sub-component's own size axis | `[]` | Boolean properties to enable on each sub-component instance so all internal children are visible (from `subComponents[].booleanOverrides` in Step 4b — set all values to `true`) |
-| **Composition** (columns show sub-component variant mappings) | `''` | `''` | Size names | Configure each column's specific property combination | `[]` |
-| **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | `[]` (use default configuration only) | `[]` |
-| **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Set state variant property per column | `[]` |
-| **Slot content** (columns are parent size names showing a preferred component) | The preferred component's own component set ID (`preferredComponentSetId` from the section plan) or `componentId` if not in a set | The preferred component's size axis name (from `slotContents[].preferredComponents[].variantAxes`) | Size names from the **parent's** size axis | `[]` | Boolean properties to enable on each preferred component instance (from `slotContents[].preferredComponents[].booleanDefs` — set all values to `true`) |
-| **Boolean-toggled** (standalone component with booleans controlling structural elements like slots, accessories, subtext) | `''` | `''` | One label per meaningful boolean combination (e.g., `["Default", "With subtext", "No micro button"]`) | Each entry is a `PROPERTY_OVERRIDES` object setting the relevant booleans for that combination | `[]` |
+| Section type | `SUB_COMP_SET_ID` | `VARIANT_AXIS` | `COLUMN_VALUES` | `PROPERTY_OVERRIDES` | `SUB_COMP_OVERRIDES` | `SLOT_POPULATION` |
+|---|---|---|---|---|---|---|
+| **Size/variant** (columns are size names like Large, Medium, Small) | `''` | The axis name (e.g., `"Size"`) | Size names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` | `null` |
+| **Density** (columns are density modes from variable collections) | `''` | `''` | Mode names (e.g., `["Compact", "Default", "Spacious"]`) | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` | `null` |
+| **Shape** (columns are shape variants) | `''` | The axis name (e.g., `"Shape"`) | Shape names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` | `null` |
+| **Sub-component** (columns are size names showing a specific child) | The sub-component's own component set ID (from `subComponents[].subCompSetId` in Step 4b extraction) | The sub-component's size axis name (from `subComponents[].subCompVariantAxes`) | Size names from the sub-component's own size axis | `[]` | Boolean properties to enable on each sub-component instance so all internal children are visible (from `subComponents[].booleanOverrides` in Step 4b — set all values to `true`) | `null` |
+| **Composition** (columns show sub-component variant mappings) | `''` | `''` | Size names | Configure each column's specific property combination | `[]` | `null` |
+| **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible. Do **not** vary the configuration axis — use the default configuration | `[]` | `null` |
+| **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Enable all parent-level booleans from `booleanDefs` to `true`, then for each column also set the state variant property for that column | `[]` | `null` |
+| **Slot content** (columns are parent size names showing a preferred component placed in the slot) | `''` (preview is sourced from the parent — preferred is nested via `SLOT_POPULATION`) | The parent's size axis name (so the parent renders at each column's size) | Size names from the **parent's** size axis | Enable all parent-level booleans from `booleanDefs` to `true` (so the slot is visible) | `[]` | `{ slotName: '<from sectionPlan>', preferredComponentId: '<from sectionPlan>', preferredComponentSetId: '<from sectionPlan> or null', preferredVariantAxis: '<preferred component\'s size axis name from slotContents[].preferredComponents[].variantAxes, or null>', preferredBooleanDefs: { <all preferredComponents[].booleanDefs keys → true> } }` |
+| **Boolean-toggled** (standalone component with booleans controlling structural elements like slots, accessories, subtext) | `''` | `''` | One label per meaningful boolean combination (e.g., `["Default", "With subtext", "No micro button"]`) | Each entry is a `PROPERTY_OVERRIDES` object setting the relevant booleans for that combination | `[]` | `null` |
 
-**Boolean-toggled previews:** For standalone components with no variant axes, show meaningful boolean combinations as separate labeled preview instances. Always include the default state (all booleans at their defaults) plus the fully-enabled state. When the section documents a specific boolean-controlled element (e.g., heading accessory, subtext), show both the on and off states for that element.
+**Boolean-toggled previews:** For standalone components with no variant axes, show meaningful boolean combinations as separate labeled preview instances. Always include the default state (all booleans at their defaults) plus the fully-enabled state. When the section documents a specific boolean-controlled element (e.g., heading accessory, subtext), show both the on and off states for that element. Boolean-toggled is the **only** section type that does NOT auto-enable parent booleans or recursively enable nested booleans — its per-column `PROPERTY_OVERRIDES` is the configuration spec and must not be clobbered.
 
 **Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview. Both `subCompSetId` and `booleanOverrides` are pre-resolved by the enhanced extraction script (Step 4b) — no additional `figma_execute` exploration is needed to discover them.
 
-**Slot content preview sourcing:** `slotContent` section previews also use isolated preferred-component instances for visual clarity. This preview choice does **not** change row ownership in the table: the table still documents only the hosting container and slot-imposed deltas, not a second full structure spec for the preferred component.
+**Slot content preview sourcing:** `slotContent` previews show the parent component with the preferred component **nested inside the actual SLOT node** (not as a standalone preview). The script sources the parent inst at the column's parent size, locates the SLOT node by `SLOT_POPULATION.slotName`, creates an instance of the preferred component (matched to its own size axis when present), and `slotNode.appendChild(prefInst)`. This makes the preview a faithful reference for the table — the SLOT's contextual padding, sizing mode, and spacing are live in the inst tree, so canvas measurements drawn on this preview correctly reflect the slot-imposed values the table documents. If `appendChild` fails for any reason, the preferred component is placed as a 0.6-opacity ghost overlay at the slot's bbox and annotation is skipped for that column. Row ownership in the table is unchanged: it still documents only the hosting container and slot-imposed deltas, not a second full structure spec for the preferred component.
+
+**Recursive nested-boolean enable:** Every section type **except `boolean-toggled`** runs a recursive walker (mirrors the equivalent walker in {{skill:create-color}}) after `createInstance` + `setProperties`. The walker descends every nested INSTANCE in the inst tree and enables every BOOLEAN property on it. This guarantees that any optional child documented in the section's table is visible in the preview even when it's gated by a sub-component's own boolean (e.g., a Label's "Show character count" inside a Text Field's Size section). Boolean-toggled sections are excluded so their per-column `PROPERTY_OVERRIDES` remains authoritative.
+
+**Build the annotation plan (mandatory before 11c):**
+
+The annotation plan controls which canvas measurement overlays Step 11c draws on each preview instance. It is built **strictly from the section's `ROWS`** — never from inspecting the inst — so overlays can only ever reflect what the table documents.
+
+For each value-column index `i`, build `annotationPlan[i]` — an object whose keys are drawn ONLY from this allowlist:
+
+| Row `spec` (from Step 7) | `annotationPlan[i]` keys emitted | Notes |
+|---|---|---|
+| `padding` | `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` (all four with the same `{token}`) | Uniform padding |
+| `verticalPadding` | `paddingTop`, `paddingBottom` | Symmetric vertical |
+| `horizontalPadding` | `paddingStart`, `paddingEnd` | Symmetric horizontal |
+| `paddingTop` / `paddingBottom` / `paddingStart` / `paddingEnd` | that one side | Per-side |
+| `itemSpacing` / `contentSpacing` / `gapBetween` / `iconLabelSpacing` | `itemSpacing` | Auto-layout gap |
+| `minWidth` / `maxWidth` / `minHeight` / `maxHeight` | that one constraint | Single-axis overlay with `freeText: "min N"` / `"max N"` |
+
+Each entry is `{ token: string|null }`. `token` is the variable name when the row's `display` was token-bound (`"spacing-md (16)"` → `token = "spacing-md"`), or `null` when hardcoded (`"16"` → `token = null`). Pass `token` directly from Step 7's row data — do not re-parse `display`.
+
+**Explicit blocklist** — any row with one of these `spec` names contributes nothing to `annotationPlan`, even if it appears in the table:
+
+`cornerRadius`, `cornerRadiusTopStart`, `cornerRadiusTopEnd`, `cornerRadiusBottomStart`, `cornerRadiusBottomEnd`, `borderWidth`, `strokeWeight`, `width`, `height`, `fixedWidth`, `fixedHeight`, `iconSize`, `leadingIconSize`, `trailingIconSize`, `slotWidth`, `slotMinWidth`, `slotMaxWidth`, `widthMode`, `heightMode`, `verticalAlignment`, `horizontalAlignment`, `clipsContent`, `textStyle`, `fontSize`, `fontWeight`, `lineHeight`, `letterSpacing`, `iconName`, `leadingIcon`, `trailingIcon`, group-header rows (all-`–` values), and anything not in the allowlist above.
+
+If `annotationPlan[i]` is empty for every column (e.g., a shape-only or typography-only section), 11c draws nothing and `measurementCount` is `0` by design. That is the correct outcome.
+
+**Annotation scope (`ANNOTATE_SCOPE`):**
+
+- `"rootOnly"` for variant / density / shape / composition / behavior / state-conditional / boolean-toggled sections (the table documents the root container's own auto-layout settings).
+- `"fullTree"` for `subComponent` and `slotContent` sections (the table documents the inst's internal structure, including the SLOT node for `slotContent`). Recursion stops at nested INSTANCE boundaries — those have their own spec sections.
 
 #### Step 11b: Render the table
 
@@ -1414,12 +1444,16 @@ Replace the following placeholders with the values from Step 11a:
 
 - `__SECTION_ID__` — the section's node ID returned by Step 11b (`sectionId` in the return value)
 - `__COMP_SET_NODE_ID__` — the component set (or standalone component) node ID
-- `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from `subComponents[].subCompSetId` in Step 4b (empty string `''` for non-sub-component sections)
+- `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from `subComponents[].subCompSetId` in Step 4b (empty string `''` for non-sub-component sections; also `''` for `slotContent` — the preferred component is nested via `SLOT_POPULATION`, not sourced as `SUB_COMP_SET_ID`)
 - `__DEFAULT_PROPS_JSON__` — object mapping all variant axis names to their default values (from `variantAxes` in Step 4b extraction). When `SUB_COMP_SET_ID` is non-empty, use the sub-component's own variant axes defaults from `subComponents[].subCompVariantAxes` instead.
 - `__VARIANT_AXIS__` — from the decision table in Step 11a
 - `__COLUMN_VALUES_JSON__` — from the decision table in Step 11a
 - `__PROPERTY_OVERRIDES_JSON__` — from the decision table in Step 11a
 - `__SUB_COMP_OVERRIDES_JSON__` — object mapping sub-component boolean property keys to `true`, from `subComponents[].booleanOverrides` in Step 4b (empty object `{}` for non-sub-component sections)
+- `__SLOT_POPULATION_JSON__` — from the decision table in Step 11a (`null` for every section type EXCEPT `slotContent`; an object describing the slot to populate for `slotContent` sections). When non-null, the script sources from the parent, locates the slot by `slotName`, and `slotNode.appendChild()` an instance of the preferred component.
+- `__IS_BOOLEAN_TOGGLED__` — `true` only for `boolean-toggled` sections; `false` everywhere else. When `false`, the script runs the recursive nested-boolean enabler so all documented optional children are visible. When `true`, it's skipped because per-column `PROPERTY_OVERRIDES` is the configuration spec.
+- `__ANNOTATION_PLAN_JSON__` — from "Build the annotation plan" in Step 11a. Array of length `COLUMN_VALUES.length`. Each entry is either `{}` (no annotations for that column) or an object whose keys are drawn from the allowlist (`paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd`, `itemSpacing`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`) and whose values are `{ token: string|null }`.
+- `__ANNOTATE_SCOPE__` — `"rootOnly"` or `"fullTree"`, from Step 11a's annotation-scope rule.
 
 ```javascript
 const SECTION_ID = '__SECTION_ID__';
@@ -1430,6 +1464,10 @@ const VARIANT_AXIS = '__VARIANT_AXIS__';
 const COLUMN_VALUES = __COLUMN_VALUES_JSON__;
 const PROPERTY_OVERRIDES = __PROPERTY_OVERRIDES_JSON__;
 const SUB_COMP_OVERRIDES = __SUB_COMP_OVERRIDES_JSON__;
+const SLOT_POPULATION = __SLOT_POPULATION_JSON__;
+const IS_BOOLEAN_TOGGLED = __IS_BOOLEAN_TOGGLED__;
+const ANNOTATION_PLAN = __ANNOTATION_PLAN_JSON__;
+const ANNOTATE_SCOPE = '__ANNOTATE_SCOPE__';
 const FONT_FAMILY = '__FONT_FAMILY__';
 
 async function loadAllFonts(rootNode) {
@@ -1461,11 +1499,32 @@ async function loadFontWithFallback(family, preferredStyle, fallbackStyle) {
   return { family: 'Inter', style: 'Regular' };
 }
 
+function enableNestedBooleans(node) {
+  try {
+    if (node.type === 'INSTANCE') {
+      const childProps = node.componentProperties;
+      if (childProps) {
+        const childBoolProps = {};
+        for (const [key, val] of Object.entries(childProps)) {
+          if (val.type === 'BOOLEAN') childBoolProps[key] = true;
+        }
+        if (Object.keys(childBoolProps).length > 0) {
+          try { node.setProperties(childBoolProps); } catch {}
+        }
+      }
+    }
+    if ('children' in node && node.children) {
+      for (const child of node.children) { try { enableNestedBooleans(child); } catch {} }
+    }
+  } catch {}
+}
+
 const section = await figma.getNodeByIdAsync(SECTION_ID);
 if (!section) return { error: 'Section not found: ' + SECTION_ID };
 
 let _p = section; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
 if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
+const page = _p.type === 'PAGE' ? _p : figma.currentPage;
 
 const preview = section.findOne(n => n.name === '#Preview');
 if (!preview) return { error: 'No #Preview frame in section: ' + SECTION_ID };
@@ -1542,8 +1601,13 @@ for (const entry of instances) {
       inst.setProperties(PROPERTY_OVERRIDES[entry.overrideIndex]);
       await loadAllFonts(inst);
     }
+    if (!IS_BOOLEAN_TOGGLED) {
+      enableNestedBooleans(inst);
+      await loadAllFonts(inst);
+    }
     wrapper.appendChild(inst);
     entry._inst = inst;
+    entry._ghostOnly = false;
   }
 
   const label = figma.createText();
@@ -1557,13 +1621,147 @@ for (const entry of instances) {
   wrappers.push({ wrapper, entry });
 }
 
-return { success: true, section: SECTION_ID };
+if (SLOT_POPULATION && SLOT_POPULATION.slotName) {
+  const prefSourceId = SLOT_POPULATION.preferredComponentSetId || SLOT_POPULATION.preferredComponentId;
+  const prefSourceNode = await figma.getNodeByIdAsync(prefSourceId);
+  const prefIsCS = prefSourceNode && prefSourceNode.type === 'COMPONENT_SET';
+  const prefBoolDefs = SLOT_POPULATION.preferredBooleanDefs || {};
+  const prefAxis = SLOT_POPULATION.preferredVariantAxis || '';
+
+  for (let i = 0; i < wrappers.length; i++) {
+    const entry = wrappers[i].entry;
+    if (!entry._inst || !prefSourceNode) continue;
+    const slotNode = entry._inst.findOne(n => n.type === 'SLOT' && n.name === SLOT_POPULATION.slotName);
+    if (!slotNode) continue;
+
+    let prefVariant = prefSourceNode;
+    if (prefIsCS) {
+      const target = {};
+      if (prefAxis) target[prefAxis] = entry.colValue;
+      let bestFallback = prefSourceNode.children[0];
+      let bestScore = -1;
+      for (const child of prefSourceNode.children) {
+        const vp = child.variantProperties || {};
+        let score = 0;
+        let exact = true;
+        for (const [k, v] of Object.entries(target)) {
+          if (vp[k] === v) { score++; } else { exact = false; }
+        }
+        if (exact) { prefVariant = child; break; }
+        if (score > bestScore) { bestScore = score; bestFallback = child; }
+      }
+      if (prefVariant === prefSourceNode) prefVariant = bestFallback;
+    }
+    if (!prefVariant || (prefVariant.type !== 'COMPONENT' && prefVariant.type !== 'INSTANCE')) continue;
+
+    let prefInst;
+    try { prefInst = prefVariant.createInstance(); } catch { continue; }
+    await loadAllFonts(prefInst);
+    if (Object.keys(prefBoolDefs).length > 0) {
+      try { prefInst.setProperties(prefBoolDefs); } catch {}
+      await loadAllFonts(prefInst);
+    }
+    enableNestedBooleans(prefInst);
+    await loadAllFonts(prefInst);
+
+    let inserted = false;
+    try { slotNode.appendChild(prefInst); inserted = true; } catch {}
+    if (!inserted) {
+      try {
+        wrappers[i].wrapper.layoutMode = 'NONE';
+        wrappers[i].wrapper.appendChild(prefInst);
+        const slotAbsX = slotNode.absoluteTransform[0][2];
+        const slotAbsY = slotNode.absoluteTransform[1][2];
+        const wrapAbsX = wrappers[i].wrapper.absoluteTransform[0][2];
+        const wrapAbsY = wrappers[i].wrapper.absoluteTransform[1][2];
+        prefInst.x = Math.round(slotAbsX - wrapAbsX + (slotNode.width - prefInst.width) / 2);
+        prefInst.y = Math.round(slotAbsY - wrapAbsY + (slotNode.height - prefInst.height) / 2);
+        prefInst.opacity = 0.6;
+        entry._ghostOnly = true;
+      } catch {}
+    }
+  }
+}
+
+function annotate(node, plan, isRoot, scope) {
+  if (!node.visible) return 0;
+  let count = 0;
+  const isAuto = node.layoutMode && node.layoutMode !== 'NONE';
+  const kids = ('children' in node) ? node.children.filter(c => c.visible) : [];
+  const first = kids[0], last = kids[kids.length - 1];
+
+  if (isAuto && first) {
+    const sides = [
+      ['paddingTop',    { node: node, side: 'TOP'    }, { node: first, side: 'TOP'    }],
+      ['paddingBottom', { node: last, side: 'BOTTOM' }, { node: node, side: 'BOTTOM' }],
+      ['paddingStart',  { node: node, side: 'LEFT'   }, { node: first, side: 'LEFT'   }],
+      ['paddingEnd',    { node: last, side: 'RIGHT'  }, { node: node, side: 'RIGHT'  }],
+    ];
+    for (const [key, start, end] of sides) {
+      const entry = plan && plan[key];
+      if (!entry) continue;
+      const opts = entry.token ? { freeText: entry.token } : undefined;
+      try { page.addMeasurement(start, end, opts); count++; } catch {}
+    }
+
+    const gapEntry = plan && plan.itemSpacing;
+    if (gapEntry && kids.length > 1 && (node.itemSpacing || 0) > 0) {
+      const isH = node.layoutMode === 'HORIZONTAL';
+      const opts = gapEntry.token ? { freeText: gapEntry.token } : undefined;
+      for (let i = 0; i < kids.length - 1; i++) {
+        try {
+          page.addMeasurement(
+            { node: kids[i],     side: isH ? 'RIGHT' : 'BOTTOM' },
+            { node: kids[i + 1], side: isH ? 'LEFT'  : 'TOP'    },
+            opts
+          );
+          count++;
+        } catch {}
+      }
+    }
+  }
+
+  for (const [key, axis] of [['minWidth','H'],['maxWidth','H'],['minHeight','V'],['maxHeight','V']]) {
+    const entry = plan && plan[key];
+    if (!entry) continue;
+    const v = node[key];
+    if (typeof v !== 'number' || v <= 0 || v >= 10000) continue;
+    const prefix = key.startsWith('min') ? 'min ' : 'max ';
+    try {
+      page.addMeasurement(
+        { node: node, side: axis === 'H' ? 'LEFT' : 'TOP' },
+        { node: node, side: axis === 'H' ? 'RIGHT' : 'BOTTOM' },
+        { freeText: prefix + Math.round(v) }
+      );
+      count++;
+    } catch {}
+  }
+
+  if (scope === 'fullTree' && (isRoot || node.type !== 'INSTANCE')) {
+    for (const c of kids) count += annotate(c, plan, false, scope);
+  }
+  return count;
+}
+
+let measurementCount = 0;
+let plannedColumns = 0;
+for (let i = 0; i < wrappers.length; i++) {
+  const entry = wrappers[i].entry;
+  if (!entry._inst || entry._ghostOnly) continue;
+  const plan = ANNOTATION_PLAN[i];
+  if (!plan || Object.keys(plan).length === 0) continue;
+  plannedColumns++;
+  try { for (const m of page.getMeasurementsForNode(entry._inst)) page.deleteMeasurement(m.id); } catch {}
+  measurementCount += annotate(entry._inst, plan, true, ANNOTATE_SCOPE);
+}
+
+return { success: true, section: SECTION_ID, measurementCount: measurementCount, plannedColumns: plannedColumns };
 ```
 
 ### Step 12: Visual Validation
 
 1. `figma_take_screenshot` with the `frameId` — Capture the completed spec
-2. Verify:
+2. Verify visually (from the screenshot):
    - All sections are present with correct titles
    - Column headers match the expected variants/sizes
    - Row values are filled correctly
@@ -1573,8 +1771,14 @@ return { success: true, section: SECTION_ID };
    - **Preview layout**: Instances are placed inside the `#Preview` frame. Each instance has a label below it. The template's `#Preview` frame provides the layout — the script does not override any of its properties.
    - Column widths look balanced — the notes column is not crushed
    - **Sub-component preview correctness**: Sub-component section previews show instances from the sub-component's own component set (not the parent). Verify that the preview shows the sub-component in isolation (e.g., four Label instances at different sizes, not four full Text Field instances). If `SUB_COMP_OVERRIDES` was specified, verify that optional internal children (e.g., character count, icons) are visible on each preview instance.
+   - **Slot content preview correctness**: `slotContent` section previews show the parent component with the preferred component nested inside the actual SLOT node (not a standalone preferred-component preview). Verify that the preferred component appears inside the parent at each parent size, with all parent-level booleans enabled so the slot is visible.
+   - **Recursive boolean enable**: For every section type except `boolean-toggled`, optional children documented in the table should be visible on every preview instance — even children gated by booleans deep inside nested sub-components.
    - **Behavior variant preview simplicity**: When a behavior/configuration axis exists (e.g., Static vs Interactive), the preview shows only the default configuration — one row of instances at each size. Do NOT duplicate instances for each configuration.
-3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
+3. Verify measurements (NOT from the screenshot — measurements are a canvas overlay produced by `page.addMeasurement(...)` and they DO NOT appear in `figma_take_screenshot` / `get_screenshot` output):
+   - For each section's Step 11c return value, compare `measurementCount` against `plannedColumns`. If `plannedColumns > 0` and `measurementCount === 0`, the inst was likely missing or hidden — re-run that section's 11c.
+   - Sections whose tables contain only blocklisted properties (cornerRadius / borderWidth / typography / sizing modes / icon refs / etc.) are expected to return `plannedColumns === 0` and need no follow-up.
+   - For `slotContent` sections specifically, if the preferred component fell back to ghost-overlay placement (`appendChild` failed), annotation is intentionally skipped for that column. Confirm visually in the screenshot that the preferred component is overlaid at the slot bbox at 0.6 opacity — if so, the table values still apply but the overlay can't be drawn for that column.
+4. If issues are found, fix via `figma_execute` / `use_figma` and re-capture (up to 3 iterations)
 
 ### Step 13: Completion Link
 
@@ -1589,3 +1793,6 @@ Structure spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameI
 - The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, it is treated as a single-entry variants array and there are no variant axes. Preview instance creation in Step 11c uses `compNode.createInstance()` directly for standalone components.
 - Dynamic columns: The `#variant-value` template in the header row and `#property-value-cell` in each data row are cloned once per value column, then the original template is removed. Clones are inserted before the Notes column to maintain correct column order. All value columns and the Notes column use `layoutSizingHorizontal = 'FILL'` so Figma's auto-layout distributes width equally across them.
 - Each section is rendered in a separate `figma_execute` call to avoid timeouts.
+- **Native canvas measurements:** Step 11c annotates each preview instance with native Figma measurement overlays via `page.addMeasurement(...)`. Annotation is gated by the section's table — only properties present in `ANNOTATION_PLAN` (paddings, gap/itemSpacing, min/max width/height) are drawn. Token-bound rows render the token name on the line via `freeText`; hardcoded rows let Figma's default numeric label show through; min/max constraints render with a `"min N"` / `"max N"` prefix. Per-instance idempotency is provided by `getMeasurementsForNode` + `deleteMeasurement` before each annotation pass. Both `figma-console` (`figma_execute`) and `figma-mcp` (`use_figma`) execute the identical JS — no MCP-specific branch is needed. Measurements are a canvas overlay and do NOT appear in screenshot output; verify via the `measurementCount` / `plannedColumns` returned by Step 11c.
+- **Slot content preview faithfulness:** `slotContent` previews source the parent component at each column's parent size and use `slotNode.appendChild()` to nest the preferred component inside the actual SLOT node (mirrors the slot-nesting pattern used in {{skill:create-anatomy}}). This makes the preview a faithful reference for the table — the SLOT's contextual padding, sizing, and spacing are live in the inst tree, so canvas measurements correctly reflect the slot-imposed values. Ghost-overlay fallback (0.6 opacity at the slot's bbox) handles the rare case where `appendChild` fails; annotation is skipped for that column when ghost fallback fires.
+- **Recursive nested-boolean enable:** Every section type except `boolean-toggled` runs a recursive walker after `createInstance` + `setProperties` that enables every BOOLEAN property on every nested INSTANCE (mirrors the equivalent walker in {{skill:create-color}}). This guarantees that any optional child documented in the section's table is visible in the preview, even when it's gated by a sub-component's own boolean (e.g., a Label's "Show character count" inside a Text Field's Size section). Boolean-toggled sections are excluded so their per-column `PROPERTY_OVERRIDES` remains authoritative.
