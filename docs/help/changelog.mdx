@@ -3,6 +3,19 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="0.2.8 — May 2026" description="CLI build script wipes templates/ before each build so deleted files no longer ship as zombies">
+  ## uspec-skills 0.2.8
+
+  The `packages/cli/scripts/build.mjs` build now wipes `templates/` before re-syncing it from the source `skills/` and `references/` trees. Previously the build only overlaid via `cpSync`, so any file ever copied stayed forever — files deleted from the source persisted in `templates/`, shipped in the npm tarball, and were resurrected into consumer `references/` directories on every `npx uspec-skills update`.
+
+  ### What you might notice after updating
+
+  - Running `npx uspec-skills update` may **delete** stale files in your local `references/` directory that were never part of the current source tree (e.g., files like `references/_shared/mcp-adapter.md` or `references/structure/scripts/*.js` that were removed from the source long ago but kept resurrecting). This is the cleanup catching up
+  - No skill or spec behavior changes. This is a packaging hygiene fix only
+
+  Run `npx uspec-skills update` to pick up the change.
+</Update>
+
 <Update label="V2.1.3 — May 2026" description="create-structure extraction no longer crashes on TEXT children when reading auto-layout properties">
   ## uSpec V2.1.3
 

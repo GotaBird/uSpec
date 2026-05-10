@@ -31,6 +31,11 @@ const referencesSrc = resolve(repoRoot, 'references');
 
 function syncTemplates() {
   const templatesDist = resolve(pkgRoot, 'templates');
+  // Wipe templates/ before each build so files deleted from source skills/ or
+  // references/ do not persist as zombies in the published npm tarball. cpSync
+  // is non-deleting, so without this step every prior file ever copied would
+  // accumulate forever and ship to consumers.
+  if (existsSync(templatesDist)) rmSync(templatesDist, { recursive: true, force: true });
   mkdirSync(templatesDist, { recursive: true });
 
   if (existsSync(skillsSrc)) {
