@@ -106,6 +106,8 @@ Navigate to the component file and extract structural data using MCP tools.
 
 **4b. Run the enhanced extraction script** via `figma_execute`. Replace `__NODE_ID__` with the actual node ID. This script performs sub-component discovery, boolean enumeration, token binding resolution, and returns a collapsed/expanded dimensional model with logical direction normalization and pre-formatted display strings.
 
+> **Maintainer note — defensive property reads.** The Figma plugin API throws synchronously when reading auto-layout properties (`itemSpacing`, `counterAxisSpacing`, `padding*`, `layoutMode`, `layoutSizing*`, `clipsContent`, primary/counter axis aligns) on nodes that don't support them — most commonly TEXT, VECTOR, and GROUP children. Guards like `node[p] !== undefined && node[p] !== figma.mixed` run the access *first* and so do not protect against the throw. The Steps 4b, 4d, and 4e scripts wrap every `node[p]` read in `try { ... } catch {}` and gate layout-only property groups on `isContainer = 'layoutMode' in node` (mirroring the `sg(node, prop)` accessor in `figma-plugin/src/safe.ts`). When extending these scripts with new property reads, follow the same pattern.
+
 ```javascript
 const TARGET_NODE_ID = '__NODE_ID__';
 
@@ -172,66 +174,81 @@ function collapseCornerRadius(tl, tr, bl, br, tTL, tTR, tBL, tBR) {
 
 async function extractDimensions(node) {
   const dims = {};
-  const simpleProps = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'itemSpacing', 'counterAxisSpacing'];
-  for (const p of simpleProps) {
-    if (node[p] !== undefined && node[p] !== null && node[p] !== figma.mixed) {
-      const token = await resolveBinding(node, p);
-      const v = rv(node[p]);
-      dims[p] = { value: v, token: token || null, display: makeDisplayString(v, token) };
-    }
-  }
-
-  const tPT = await resolveBinding(node, 'paddingTop');
-  const tPB = await resolveBinding(node, 'paddingBottom');
-  const tPS = await resolveBinding(node, 'paddingLeft');
-  const tPE = await resolveBinding(node, 'paddingRight');
-  if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
-    dims.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
-  }
-
-  if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
-    if (node.cornerRadius === figma.mixed) {
-      const tTL = await resolveBinding(node, 'topLeftRadius');
-      const tTR = await resolveBinding(node, 'topRightRadius');
-      const tBL = await resolveBinding(node, 'bottomLeftRadius');
-      const tBR = await resolveBinding(node, 'bottomRightRadius');
-      dims.cornerRadius = collapseCornerRadius(
-        rv(node.topLeftRadius || 0), rv(node.topRightRadius || 0),
-        rv(node.bottomLeftRadius || 0), rv(node.bottomRightRadius || 0),
-        tTL, tTR, tBL, tBR
-      );
-    } else {
-      const token = await resolveBinding(node, 'cornerRadius');
-      const v = rv(node.cornerRadius);
-      dims.cornerRadius = { value: v, token: token || null, display: makeDisplayString(v, token) };
-    }
-  }
-
-  if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
-    if (node.strokeWeight === figma.mixed) {
-      const sides = {};
-      for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
-        if (node[s] !== undefined) {
-          const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
-          sides[logicalKey] = { value: rv(node[s]), token: null, display: String(rv(node[s])) };
-        }
+  const isContainer = 'layoutMode' in node;
+  const universalProps = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'];
+  const containerProps = isContainer ? ['itemSpacing', 'counterAxisSpacing'] : [];
+  for (const p of [...universalProps, ...containerProps]) {
+    try {
+      const val = node[p];
+      if (val !== undefined && val !== null && val !== figma.mixed) {
+        const token = await resolveBinding(node, p);
+        const v = rv(val);
+        dims[p] = { value: v, token: token || null, display: makeDisplayString(v, token) };
       }
-      dims.strokeWeight = sides;
-    } else {
-      const token = await resolveBinding(node, 'strokeWeight');
-      const v = rv(node.strokeWeight);
-      dims.strokeWeight = { value: v, token: token || null, display: makeDisplayString(v, token) };
-    }
+    } catch {}
   }
 
-  if (node.layoutMode && node.layoutMode !== 'NONE') {
-    dims.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode };
+  if (isContainer) {
+    try {
+      const tPT = await resolveBinding(node, 'paddingTop');
+      const tPB = await resolveBinding(node, 'paddingBottom');
+      const tPS = await resolveBinding(node, 'paddingLeft');
+      const tPE = await resolveBinding(node, 'paddingRight');
+      if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
+        dims.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
+      }
+    } catch {}
   }
-  if (node.primaryAxisAlignItems) dims.primaryAxisAlignItems = { value: node.primaryAxisAlignItems, token: null, display: node.primaryAxisAlignItems };
-  if (node.counterAxisAlignItems) dims.counterAxisAlignItems = { value: node.counterAxisAlignItems, token: null, display: node.counterAxisAlignItems };
-  if (node.layoutSizingHorizontal) dims.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal };
-  if (node.layoutSizingVertical) dims.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical };
-  if (node.clipsContent !== undefined) dims.clipsContent = { value: node.clipsContent, token: null, display: String(node.clipsContent) };
+
+  try {
+    if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
+      if (node.cornerRadius === figma.mixed) {
+        const tTL = await resolveBinding(node, 'topLeftRadius');
+        const tTR = await resolveBinding(node, 'topRightRadius');
+        const tBL = await resolveBinding(node, 'bottomLeftRadius');
+        const tBR = await resolveBinding(node, 'bottomRightRadius');
+        dims.cornerRadius = collapseCornerRadius(
+          rv(node.topLeftRadius || 0), rv(node.topRightRadius || 0),
+          rv(node.bottomLeftRadius || 0), rv(node.bottomRightRadius || 0),
+          tTL, tTR, tBL, tBR
+        );
+      } else {
+        const token = await resolveBinding(node, 'cornerRadius');
+        const v = rv(node.cornerRadius);
+        dims.cornerRadius = { value: v, token: token || null, display: makeDisplayString(v, token) };
+      }
+    }
+  } catch {}
+
+  try {
+    if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
+      if (node.strokeWeight === figma.mixed) {
+        const sides = {};
+        for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
+          try {
+            if (node[s] !== undefined) {
+              const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
+              sides[logicalKey] = { value: rv(node[s]), token: null, display: String(rv(node[s])) };
+            }
+          } catch {}
+        }
+        dims.strokeWeight = sides;
+      } else {
+        const token = await resolveBinding(node, 'strokeWeight');
+        const v = rv(node.strokeWeight);
+        dims.strokeWeight = { value: v, token: token || null, display: makeDisplayString(v, token) };
+      }
+    }
+  } catch {}
+
+  if (isContainer) {
+    try { if (node.layoutMode && node.layoutMode !== 'NONE') dims.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode }; } catch {}
+    try { if (node.primaryAxisAlignItems) dims.primaryAxisAlignItems = { value: node.primaryAxisAlignItems, token: null, display: node.primaryAxisAlignItems }; } catch {}
+    try { if (node.counterAxisAlignItems) dims.counterAxisAlignItems = { value: node.counterAxisAlignItems, token: null, display: node.counterAxisAlignItems }; } catch {}
+    try { if (node.layoutSizingHorizontal) dims.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal }; } catch {}
+    try { if (node.layoutSizingVertical) dims.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical }; } catch {}
+    try { if (node.clipsContent !== undefined) dims.clipsContent = { value: node.clipsContent, token: null, display: String(node.clipsContent) }; } catch {}
+  }
 
   return dims;
 }
@@ -597,61 +614,78 @@ function collapseCornerRadius(tl, tr, bl, br, tTL, tTR, tBL, tBR) {
 
 async function measureNode(node) {
   const m = {};
-  const props = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'itemSpacing', 'counterAxisSpacing'];
-  for (const p of props) {
-    if (node[p] !== undefined && node[p] !== null && node[p] !== figma.mixed) {
-      const token = await resolveBinding(node, p);
-      const v = rv(node[p]);
-      m[p] = { value: v, token: token || null, display: makeDisplay(v, token) };
-    }
-  }
-
-  const tPT = await resolveBinding(node, 'paddingTop');
-  const tPB = await resolveBinding(node, 'paddingBottom');
-  const tPS = await resolveBinding(node, 'paddingLeft');
-  const tPE = await resolveBinding(node, 'paddingRight');
-  if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
-    m.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
-  }
-
-  if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
-    if (node.cornerRadius === figma.mixed) {
-      const tTL = await resolveBinding(node, 'topLeftRadius');
-      const tTR = await resolveBinding(node, 'topRightRadius');
-      const tBL = await resolveBinding(node, 'bottomLeftRadius');
-      const tBR = await resolveBinding(node, 'bottomRightRadius');
-      m.cornerRadius = collapseCornerRadius(
-        rv(node.topLeftRadius || 0), rv(node.topRightRadius || 0),
-        rv(node.bottomLeftRadius || 0), rv(node.bottomRightRadius || 0),
-        tTL, tTR, tBL, tBR
-      );
-    } else {
-      const token = await resolveBinding(node, 'cornerRadius');
-      const v = rv(node.cornerRadius);
-      m.cornerRadius = { value: v, token: token || null, display: makeDisplay(v, token) };
-    }
-  }
-
-  if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
-    if (node.strokeWeight === figma.mixed) {
-      const sides = {};
-      for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
-        if (node[s] !== undefined) {
-          const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
-          sides[logicalKey] = { value: rv(node[s]), token: null, display: String(rv(node[s])) };
-        }
+  const isContainer = 'layoutMode' in node;
+  const universalProps = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'];
+  const containerProps = isContainer ? ['itemSpacing', 'counterAxisSpacing'] : [];
+  for (const p of [...universalProps, ...containerProps]) {
+    try {
+      const val = node[p];
+      if (val !== undefined && val !== null && val !== figma.mixed) {
+        const token = await resolveBinding(node, p);
+        const v = rv(val);
+        m[p] = { value: v, token: token || null, display: makeDisplay(v, token) };
       }
-      m.strokeWeight = sides;
-    } else {
-      const token = await resolveBinding(node, 'strokeWeight');
-      const v = rv(node.strokeWeight);
-      m.strokeWeight = { value: v, token: token || null, display: makeDisplay(v, token) };
-    }
+    } catch {}
   }
 
-  if (node.layoutMode && node.layoutMode !== 'NONE') m.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode };
-  if (node.layoutSizingHorizontal) m.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal };
-  if (node.layoutSizingVertical) m.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical };
+  if (isContainer) {
+    try {
+      const tPT = await resolveBinding(node, 'paddingTop');
+      const tPB = await resolveBinding(node, 'paddingBottom');
+      const tPS = await resolveBinding(node, 'paddingLeft');
+      const tPE = await resolveBinding(node, 'paddingRight');
+      if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
+        m.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
+      }
+    } catch {}
+  }
+
+  try {
+    if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
+      if (node.cornerRadius === figma.mixed) {
+        const tTL = await resolveBinding(node, 'topLeftRadius');
+        const tTR = await resolveBinding(node, 'topRightRadius');
+        const tBL = await resolveBinding(node, 'bottomLeftRadius');
+        const tBR = await resolveBinding(node, 'bottomRightRadius');
+        m.cornerRadius = collapseCornerRadius(
+          rv(node.topLeftRadius || 0), rv(node.topRightRadius || 0),
+          rv(node.bottomLeftRadius || 0), rv(node.bottomRightRadius || 0),
+          tTL, tTR, tBL, tBR
+        );
+      } else {
+        const token = await resolveBinding(node, 'cornerRadius');
+        const v = rv(node.cornerRadius);
+        m.cornerRadius = { value: v, token: token || null, display: makeDisplay(v, token) };
+      }
+    }
+  } catch {}
+
+  try {
+    if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
+      if (node.strokeWeight === figma.mixed) {
+        const sides = {};
+        for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
+          try {
+            if (node[s] !== undefined) {
+              const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
+              sides[logicalKey] = { value: rv(node[s]), token: null, display: String(rv(node[s])) };
+            }
+          } catch {}
+        }
+        m.strokeWeight = sides;
+      } else {
+        const token = await resolveBinding(node, 'strokeWeight');
+        const v = rv(node.strokeWeight);
+        m.strokeWeight = { value: v, token: token || null, display: makeDisplay(v, token) };
+      }
+    }
+  } catch {}
+
+  if (isContainer) {
+    try { if (node.layoutMode && node.layoutMode !== 'NONE') m.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode }; } catch {}
+    try { if (node.layoutSizingHorizontal) m.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal }; } catch {}
+    try { if (node.layoutSizingVertical) m.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical }; } catch {}
+  }
 
   if (node.type === 'TEXT') {
     if (node.textStyleId && typeof node.textStyleId === 'string' && node.textStyleId !== '') {

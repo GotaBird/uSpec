@@ -3,6 +3,35 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V2.1.3 — May 2026" description="create-structure extraction no longer crashes on TEXT children when reading auto-layout properties">
+  ## uSpec V2.1.3
+
+  The `create-structure` skill's variant-walk and cross-variant comparison scripts now tolerate non-container children (TEXT, VECTOR, GROUP, …) when reading auto-layout properties such as `itemSpacing`, `counterAxisSpacing`, and the `padding*` family. Previously, the first TEXT child encountered during the walk threw a synchronous `TypeError` and aborted the entire extraction — leaving the spec unrenderable.
+
+  ### Why the walk could throw (Structure)
+
+  - Step 4b `extractDimensions` and Step 4d `measureNode` recurse into every child via `extractChildren` / `measureChildren`. Children include heterogeneous node types — TEXT, VECTOR, GROUP — that do not support auto-layout properties
+  - The Figma plugin API throws synchronously when you read `itemSpacing` (or other layout-only properties) on a node that doesn't support them. The previous guard `node[p] !== undefined && node[p] !== figma.mixed` ran the access *first*, so the throw fired before the comparison
+  - Step 4e already used the correct defensive pattern (per-access `try/catch` plus an `isContainer = 'layoutMode' in node` gate); Steps 4b and 4d now match it
+
+  ### Defensive read pattern (Structure)
+
+  - Every property read in Steps 4b and 4d is now wrapped in `try { ... } catch {}`, mirroring the `sg(node, prop)` accessor in `figma-plugin/src/safe.ts`
+  - Layout-only property groups (padding, `itemSpacing`, `counterAxisSpacing`, `layoutMode`, primary/counter axis aligns, `layoutSizing*`, `clipsContent`) are gated on `isContainer = 'layoutMode' in node` so leaf nodes skip them entirely instead of throwing
+  - The collapsed dimensional schema (`padding`, `cornerRadius`, `strokeWeight`, `typography`) is unchanged — Steps 5, 6, and 11 read the same shape they always did
+
+  ### Documentation (`uspec-skills` 0.2.7)
+
+  - `skills/create-structure/SKILL.md` adds a maintainer note above the Step 4b script explaining the throw-on-leaf hazard and the `try/catch` + `isContainer` pattern, so future script edits stay safe by default
+
+  ### Scope
+
+  - No changes to extraction shape, plan-building, table contents, sub-component walks, or canvas measurement overlays
+  - Already-rendered Figma structure specs are unaffected — this fix unblocks future runs on components whose default variant has TEXT children at the root or inside auto-layout containers
+
+  Run `npx uspec-skills update` to pick up the fix. No action needed on Figma libraries.
+</Update>
+
 <Update label="V2.1.2 — May 2026" description="create-structure padding measurement overlays now match autolayout values on cross-axis-centered children">
   ## uSpec V2.1.2
 
