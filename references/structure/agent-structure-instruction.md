@@ -124,8 +124,8 @@ The extraction script returns dimensions in a collapsed/expanded format. Use the
 - Per-corner `cornerRadius: { topStart, topEnd, bottomStart, bottomEnd }` → emit individual rows
 
 **Stroke weight:**
-- Uniform `strokeWeight: { value, token, display }` → emit one `borderWidth` row
-- Per-side `strokeWeight: { top, bottom, start, end }` → emit individual rows
+- Uniform `strokeWeight: { value, token, display }` → emit one `borderWidth` row **only when `value > 0`**. The extractor emits `{ value: 0 }` for nodes that have a `strokeWeight` property set but `strokes: []` (no paint applied) — no border is painted, so no row.
+- Per-side `strokeWeight: { top, bottom, start, end }` → emit individual rows for sides whose value is `> 0`; skip sides with value `0`.
 
 ### Logical Direction Normalization
 
@@ -832,6 +832,7 @@ Both the extraction and cross-variant data provide pre-formatted `display` strin
 ## Do NOT
 
 - Use placeholder values like `<value>` or `[TBD]` — extract real measurements
+- Emit a `borderWidth` row when extraction `strokeWeight.value` is `0` — a node can have a stroke weight set without any paint applied; that is not a border
 - Mix different variant axes in one section (don't combine size and density columns)
 - Create sections for variants that only differ by numeric values (use columns instead)
 - Put detailed component internals in sub-component sections (reference the component's own spec)
