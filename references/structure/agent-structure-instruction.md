@@ -22,15 +22,35 @@ Navigate to the component in Figma. Analyze: variant axes, density modes, size o
 **Scope constraint:** Only analyze the provided node and its children (e.g., variants and their sub-layers). Do not navigate to other pages or unrelated frames elsewhere in the Figma file.
 
 ### Description
-User-provided: component name, specific dimensional properties to document, sub-components.
+User-provided free-form text: component name, specific dimensional properties to document, sub-components, adjustment rules.
+
+### Authoritative `.md` (optional, highest precedence)
+An attached `components/<name>.md` (from the `create-component-md` skill) is authoritative for every property it documents — `borderWidth`, `padding`, `cornerRadius`, sizing modes, slot dimensions, sub-component identity, bound token names. Read its Structure, API, and Color sections in full before reasoning about any value. Where the `.md` is silent, fall back to Figma extraction. Step 4d, Step 4e, and Step 6 may not overwrite a value the `.md` sets.
 
 ### Conflicts
 
 | Scenario | Action |
 |----------|--------|
+| Authoritative `.md` provided | The `.md` wins for every property it documents. Extraction is used only for node IDs and drift detection; disagreements are emitted with the `.md` value and logged as a `generalNotes` entry. |
 | Description incomplete | Infer from Figma inspection; note assumptions in `sectionDescription` |
-| Figma contradicts description | Figma measurements win |
+| Figma contradicts description (no `.md` provided) | Figma measurements win |
 | User provides value adjustments (e.g., "reduce padding by 2 when icon shown") | The user's value IS the property value. Replace the extracted Figma value in the existing property row — do not create a second row or group for it. Add a note on the row explaining the adjustment rule (e.g., "Optical alignment: base 22 minus 2 when icon adjacent"). |
+
+---
+
+## Reasoning Discipline
+
+These rules apply at every step, including extraction interpretation and rendering.
+
+**1. The `.md` is the source of truth when provided.** The `.md` overrides Figma extraction, screenshots, defaults, and AI inference. When the `.md` and extraction disagree, emit the `.md` value and log the disagreement in `generalNotes`.
+
+**2. Every row needs provenance.** Each emitted row must be traceable to one of: a value in the `.md`, a measured value in the Step 4b extraction `_base.json`, a measured value in the cross-variant data (Step 4d/4e), or an explicit user adjustment rule. Tag rows accordingly (`provenance: "md" | "measured" | "user-rule" | "inferred"`). Never emit a row whose value cannot point to one of these sources.
+
+**3. No confabulation.** If you cannot point to evidence for a value, skip the row or escalate the gap in `generalNotes`. Do not fill in a "reasonable default." Do not assume "Figma initialises X with Y" — defaults are not a substitute for inspecting the node.
+
+**4. Screenshots verify layout, not detail.** Use screenshots to confirm layout intent (which slots exist, what stacks vertically vs horizontally, which elements are visible) and to sanity-check that the annotation overlay sits on the component. They are not evidence for paints, strokes, border widths, exact spacings, corner radii, or token bindings.
+
+**5. `strokeWeight` is not evidence of a border.** A node carries a `strokeWeight` value whether or not it has strokes painted on it. Emit a `borderWidth` row only when `strokePaintToken` (co-emitted by the extractor) is non-null.
 
 ---
 
@@ -123,9 +143,10 @@ The extraction script returns dimensions in a collapsed/expanded format. Use the
 - Uniform `cornerRadius: { value, token, display }` → emit one `cornerRadius` row
 - Per-corner `cornerRadius: { topStart, topEnd, bottomStart, bottomEnd }` → emit individual rows
 
-**Stroke weight:**
-- Uniform `strokeWeight: { value, token, display }` → emit one `borderWidth` row
-- Per-side `strokeWeight: { top, bottom, start, end }` → emit individual rows
+**Stroke weight:** A `strokeWeight` value is only meaningful when the node actually paints a stroke. The extractor co-emits `strokePaintToken` (the bound paint variable token name, or `null` when no visible stroke exists). Use that flag, not `strokeWeight` alone, to decide whether to emit a `borderWidth` row.
+- `strokePaintToken == null` → the node has no border. Do **not** emit a `borderWidth` row, regardless of the `strokeWeight` value.
+- `strokePaintToken != null` and uniform `strokeWeight: { value, token, display }` → emit one `borderWidth` row.
+- `strokePaintToken != null` and per-side `strokeWeight: { top, bottom, start, end }` → emit individual rows for the sides whose value is non-zero.
 
 ### Logical Direction Normalization
 
@@ -147,7 +168,7 @@ This ensures specs are RTL-aware by default. Use logical direction names (`paddi
 | **Resizing (Hug/Fill/Fixed)** | Frame > Resizing dropdown | `"hug"`, `"fill"`, or fixed value |
 | **Alignment** | Auto Layout > Alignment controls | `verticalAlignment`, `horizontalAlignment` (values: `"top"`, `"center"`, `"bottom"`, `"left"`, `"right"`, `"spaceBetween"`) |
 | **Corner radius** | Frame > Corner radius | `cornerRadius` (uniform) or `cornerRadiusTopStart`, `cornerRadiusTopEnd`, etc. (per-corner) |
-| **Stroke width** | Stroke > Weight | `borderWidth` (uniform) or per-side |
+| **Stroke width** | Stroke > Weight, but only when Stroke > Paints contains a visible paint | `borderWidth` (uniform) or per-side — emit only when `strokePaintToken != null` |
 | **Icon size** | Icon frame > W, H | `iconSize`, `leadingIconSize`, `trailingIconSize` |
 | **Icon/component reference** | INSTANCE child > `parentSetName` from extraction | `iconName`, `leadingIcon`, `trailingIcon` — use the component set name (e.g., `"checkmark"`), not the variant name |
 | **Clip content (overflow)** | Frame > Clip content toggle | `clipsContent` (`"true"` or `"false"`) |
@@ -831,6 +852,10 @@ Both the extraction and cross-variant data provide pre-formatted `display` strin
 
 ## Do NOT
 
+- Override an authoritative `.md` value with anything inferred from Figma extraction, a screenshot, or a "Figma default" — the `.md` is final for every property it documents
+- Emit a `borderWidth` row when `strokePaintToken` is `null` — `strokeWeight` alone is not evidence of a border
+- Cite a screenshot as evidence for paints, strokes, spacing, radii, or tokens
+- Invent values to fill a row — if there is no evidence, skip the row or surface the gap in `generalNotes`
 - Use placeholder values like `<value>` or `[TBD]` — extract real measurements
 - Mix different variant axes in one section (don't combine size and density columns)
 - Create sections for variants that only differ by numeric values (use columns instead)
@@ -876,6 +901,10 @@ Both the extraction and cross-variant data provide pre-formatted `display` strin
 - **Duplicating rows for user-provided adjustments:** When the user says "the padding is X," there is one padding row showing X — not a "base padding" row plus an "adjusted padding" row. The user's value replaces the extracted value in the existing row. A note on that row explains the adjustment rule (e.g., "Base 22 minus 2 for optical alignment when icon adjacent"). Never create a parallel property like `paddingWithIcon` alongside `horizontalPadding`.
 - **Incomplete layout coverage:** Documenting only the default layout configuration when the component has multiple structural layouts (detected by Step 4e as a structural axis). Every structural configuration that an engineer must implement gets its own section(s).
 - **Collapsing wrapper frame padding into notes:** When a content area (e.g., `trailingContent`) contains multiple child frames each with their own padding, document each wrapper frame as its own group with a `horizontalPadding` row. Do not collapse them into a single note like "8 h-padding per child" on the parent group header. Every auto-layout frame with non-zero padding needs its own group — the `__children` entries in the cross-variant data make these visible.
+- **Hand-rolling canvas measurements:** Never call `figma.currentPage.addMeasurement(...)` outside the canonical Step 11c script. If a section seems "too simple" for Step 11c, the answer is to use Step 11c with an annotation plan that has fewer keys — not a parallel ad-hoc script. Hand-rolled measurements bypass the padding-anchor heuristic, the per-instance idempotency reset, the padding-zero gate, and the token-name `freeText` overrides — every section that did this in past runs ended up with annotations that disagreed with its table.
+- **Hand-curating the annotation plan:** Building `annotationPlan[i]` by hand-picking which rows to annotate (and forgetting some — `minHeight` is the recurring miss). The plan is mechanical: run the `SPEC_TO_KEYS` lookup from Step 11a over every row in `ROWS`. If a row's `spec` isn't in the map, it's blocklisted by definition; if it is, it must contribute to every column's plan. There is no "judgment call" between the table and the plan.
+- **Treating `strokeWeight` as evidence of a border:** Emitting a `borderWidth` row from a `strokeWeight` value without checking `strokePaintToken`. A frame can have `strokeWeight: 1` and `strokes: []` — no border is painted. Gate on `strokePaintToken != null` before emitting the row.
+- **Citing a screenshot for paint or border decisions:** Concluding from a thumbnail that a frame has (or lacks) a border, a corner radius, or a specific spacing. Cross-check with the `.md` or the extraction `_base.json` instead.
 
 ---
 

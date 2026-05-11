@@ -3,6 +3,49 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V2.1.4 — May 2026" description="create-structure accepts an authoritative .md input, ships an explicit reasoning-discipline contract, gates borderWidth on strokePaintToken, and adds use_figma string-escaping guidance">
+  ## uSpec V2.1.4
+
+  The `create-structure` skill now accepts an authoritative `components/<name>.md` (produced by `create-component-md`) as its highest-precedence input. When provided, the `.md` is the source of truth for every property it documents — `borderWidth`, `padding`, `cornerRadius`, sizing modes, slot dimensions, sub-component identity, bound token names. Figma extraction is demoted to node-ID resolution and drift detection. Alongside this, the structure instruction file gains an explicit reasoning-discipline contract, `borderWidth` rows now require evidence of a painted stroke, the architecture doc captures a `use_figma` script-escaping rule, and the Figma plugin manifest carries its registration `id`.
+
+  ### `.md`-authoritative mode (Structure)
+
+  - `skills/create-structure/SKILL.md` adds **Step 0 — Detect Input Mode**. Mode A is description-only (today's behavior). Mode B reads `components/<name>.md` in full and persists it as `MD_SPEC` before any extraction runs
+  - Step 4 (visual context, enhanced extraction, cross-variant comparison, non-dimensional axis diff) still runs in Mode B, but its output is demoted to a **node-ID resolver and drift detector**. Extraction values that disagree with the `.md` are logged in `generalNotes` and the `.md` value wins
+  - Step 6 in Mode B is reduced to (1) mapping each `.md` row to extraction nodes for annotation rendering, (2) reconciling each `.md` row against the corresponding extraction value, (3) skipping the cross-section pattern recognition pass (`create-component-md` already did it)
+  - Every emitted row now carries a required `provenance` field: `"md"` (value came from the `.md`), `"measured"` (`.md` was silent, value came from extraction), `"user-rule"` (value came from a user adjustment rule), or `"inferred"` (with an accompanying note explaining what was inferred from what). Rows without a defensible provenance are not emitted
+  - When both a description and an authoritative `.md` are provided, the `.md` wins for properties it documents and the description applies only to anything the `.md` is silent on
+
+  ### Reasoning discipline (Structure)
+
+  - `references/structure/agent-structure-instruction.md` adds a **Reasoning Discipline** section that applies at every step — extraction interpretation through rendering. Five rules: (1) the `.md` is the source of truth when provided, (2) every row needs provenance, (3) no confabulation — skip rows or surface gaps in `generalNotes` rather than fill in defaults, (4) screenshots verify layout intent only, not paints/strokes/spacings/radii/tokens, (5) `strokeWeight` alone is not evidence of a border
+  - The Conflicts table grows a new top row covering authoritative `.md` precedence, and the existing "Figma contradicts description" row is qualified to "no `.md` provided"
+  - The Common Mistakes section adds matching entries: hand-rolling canvas measurements, hand-curating the annotation plan, treating `strokeWeight` as evidence of a border, citing screenshots for paint or border decisions
+  - The Do NOT list adds: overriding an authoritative `.md` value with anything inferred from extraction or screenshots, emitting `borderWidth` when `strokePaintToken == null`, citing a screenshot as evidence for paints/strokes/spacing/radii/tokens, inventing values to fill rows
+
+  ### `strokeWeight` no longer implies a border (Structure)
+
+  - The Stroke weight reading reference in `references/structure/agent-structure-instruction.md` is rewritten around a new `strokePaintToken` signal co-emitted by the extractor. A frame can carry `strokeWeight: 1` with `strokes: []` — no border is painted, and a phantom `borderWidth` row should never be emitted from such a node
+  - New emission rule: emit a `borderWidth` row only when `strokePaintToken != null`. The Inspect Reference table's Stroke width row is updated to match
+  - The collapsed dimensional schema description in `## Dimensional Data` clarifies that `strokeWeight` is only authoritative as evidence of a border when paired with a non-null `strokePaintToken`
+
+  ### `use_figma` / `figma_execute` script escaping (architecture)
+
+  - `implementation.md` adds a new "Authoring `code` strings for `use_figma` / `figma_execute`" subsection under Figma MCP Tools. Both providers serialize the `code` argument through JSON before the Figma sandbox runs it, so `\'` inside a `'...'` JS string is a recurring source of `SyntaxError` after re-escape
+  - **Rule:** when authoring note text, descriptions, or any content with apostrophes (clear-button copy like `"Visible when value isn't empty"`, contracted English in design-intent notes), wrap the JS string in `"..."` (double quotes) or use template literals (backticks). Never reach for `\'` inside a `'...'` string. This applies to every skill that ships note-bearing rows through `__ROWS_JSON__` or its equivalents
+
+  ### Figma plugin manifest id
+
+  - `figma-plugin/manifest.json` now declares its registration `id: "1635184425006534227"`. This is the plugin's permanent identity in the Figma plugin registry — it does not change anything about how the plugin runs locally or what `_base.json` it produces, but it stabilises the manifest for future plugin distribution work
+
+  ### Scope
+
+  - No changes to extraction shape, table contents, sub-component walks, slot handling, or canvas measurement overlay behavior beyond the `borderWidth`-gating rule above
+  - Already-rendered Figma structure specs are unaffected — the new mode and the new emission rule only change future `create-structure` runs
+
+  Run `npx uspec-skills update` to pick up the new skill content. No action needed on Figma libraries.
+</Update>
+
 <Update label="0.2.8 — May 2026" description="CLI build script wipes templates/ before each build so deleted files no longer ship as zombies">
   ## uspec-skills 0.2.8
 

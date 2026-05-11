@@ -156,6 +156,22 @@ if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
 
 This walks up to the PAGE ancestor and loads its content. Once the page is loaded, `findAll`, `findOne`, and other traversal methods work normally. Console MCP does not need this — `figma_execute` inherits the Desktop page context from `figma_navigate`.
 
+### Authoring `code` strings for `use_figma` / `figma_execute`
+
+Both providers serialize the `code` argument through JSON before the Figma sandbox runs it. Two compounding layers of escaping make `'` inside a `'...'` JS string the most common cause of `SyntaxError` from these calls.
+
+**Rule:** when authoring note text, descriptions, or any string content that contains apostrophes (e.g., clear button copy like `"Visible when value is non-empty"`, design-intent notes, contracted English), wrap the JS string in `"..."` (double quotes) or use template literals (backticks). Never reach for `\'` inside a `'...'` string.
+
+```javascript
+// Good
+const note = "Visible when value isn't empty";
+const note2 = `Visible when value isn't empty`;
+// Bad — produces SyntaxError after JSON re-escapes
+const note = 'Visible when value isn\'t empty';
+```
+
+This applies to every skill that ships note-bearing rows through `__ROWS_JSON__` or its equivalents.
+
 ### Font Loading in `use_figma`
 
 `getRangeAllFontNames` is **not available** in the `use_figma` sandbox and will throw `TypeError`. Use `tn.fontName` instead, which returns `{ family, style }` for uniformly-styled text or `figma.mixed` for mixed-font text.
