@@ -9,6 +9,13 @@ Generate a hierarchical anatomy annotation directly in Figma — a **composition
 
 Uses the **Anatomy & Properties v2** template with `#annotation-table`, type indicators (`#instance` / `#text` / `#slot`), and `#anatomy-section` cloning.
 
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the anatomy annotation into Figma from the input `.md`.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input component `.md` is a **READ-ONLY source of truth. Never edit, append to, or "add a section" to it.** The only artifact this skill produces is the Figma annotation. When the user asks to "create/add a section," "show," or "include" something, render it **in the Figma annotation**, never as an edit to the `.md`.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) Step 0 fail-fast when no `.md` resolves; (b) one-line abort if the Figma MCP connection is dead.
+
 ## MCP Adapter
 
 Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.
@@ -39,8 +46,10 @@ This walks up to the PAGE ancestor and loads its content. Console MCP does not n
 
 ## Inputs Expected
 
-- **Figma link to the component**: URL to a component set or standalone component in Figma (required)
-- **Figma link to the destination** (optional): URL to the page/frame where the annotation should be placed. If omitted, places it in the same file as the component.
+- **Component `.md` spec** (**required**, user-provided path) — the source-of-truth component spec produced by {{skill:create-component-md}}. **The user tells you where this `.md` lives** — use the exact path they provide; the `.md` may live anywhere. This skill **seeds its element model from the `.md`'s `render-meta` block** and then runs one bounded minimal live walk; it does NOT re-run the old full extraction. The `.md` has **no dedicated Anatomy section** — identity comes from `render-meta` (`component.compSetNodeId`, `variantAxes`, `booleanDefs`, `slotContents`, `subComponents`), and the few facts `render-meta` cannot supply (live direct-child classification, the richest variant, slot default children, wrapper visuals) come from the Step 3' walk.
+- **Figma link to the destination** (optional) — placement hint only: which page/frame to drop the rendered annotation on. `fileKey`, `nodeId`, and `compSetNodeId` always come from the `.md`'s `render-meta` block, never from the link.
+
+There is no screenshot-only path and no "extract everything from a Figma URL" path. Without the component `.md` there is no identity to seed — see Step 0's fail-fast contract.
 
 ## Workflow
 
@@ -48,9 +57,10 @@ Copy this checklist and update as you progress:
 
 ```
 Task Progress:
+- [ ] Step 0: Require + parse the component `.md` render-meta block (seed identity). FAIL FAST if missing.
 - [ ] Step 1: Verify MCP connection
 - [ ] Step 2: Read template key from uspecs.config.json
-- [ ] Step 3: Navigate to the component and extract anatomy data (incl. property definitions)
+- [ ] Step 3': Seed from render-meta + run the bounded minimal live walk (classify direct children, pick richest variant, read slot defaults, check wrapper visuals)
 - [ ] Step 4: Evaluate variant selection, classify elements, and enrich notes (AI reasoning)
 - [ ] Step 5: Navigate to destination (if different file)
 - [ ] Step 6: Import and detach the Anatomy template
@@ -59,6 +69,31 @@ Task Progress:
 - [ ] Step 8b: Per-sub-component child sections (property-aware unhide)
 - [ ] Step 10: Visual validation
 ```
+
+### Step 0: Require and parse the component `.md` (fail fast)
+
+**This skill is a consumer of the `.md` source of truth.** Unlike the other `create-*` skills, the `.md` has **no dedicated "Anatomy" body section** — so create-anatomy seeds *identity only* from the `render-meta` block and supplements it with one bounded live walk (Step 3'). It does NOT parse an Anatomy section body, and it does NOT re-run the legacy full tree-walk extraction.
+
+1. **Resolve the `.md` path.** Use the exact path the user gave, else an attached or open `.md` in context. The `.md` may live anywhere; do NOT invent or guess a path. If neither resolves to an existing file, abort per item 2. Never pause to ask the user which file to use.
+2. **Require the file.** If no file exists at the resolved `.md` path, **abort immediately** with this exact single-line diagnostic and stop — do NOT fall back to extraction:
+
+   > This skill requires the component's Markdown `.md` spec (produced by create-component-md). Provide the path to it. (create-component-md needs a _base.json from the uSpec Extract plugin.)
+
+3. **Parse the `render-meta` block** (the fenced JSON between `<!-- render-meta:start v=1 -->` and `<!-- render-meta:end -->`). There is **no Anatomy body section to parse** — every seed value comes from this block:
+   - `COMP_SET_ID` = `render-meta.component.compSetNodeId` — the target node for the Step 3' walk, the Step 6 template placement, and every artwork instance in Steps 8/8b.
+   - `IS_COMPONENT_SET` = `render-meta.component.isComponentSet`.
+   - `COMPONENT_NAME` = `render-meta.component.componentName`.
+   - `VARIANT_AXES` = `render-meta.variantAxes` (`{ axisName: [options] }`) and `VARIANT_AXES_DEFAULTS` = `render-meta.variantAxesDefaults` — used by Step 4 sub-step 0 to decide whether a structurally richer variant exists. This **replaces** reading `componentPropertyDefinitions` live for variant axes.
+   - `BOOLEAN_DEFS` = `render-meta.booleanDefs[]` (`{ key, default, associatedLayerName, associatedLayerId }`) — the source for boolean-controlled hidden elements. `key` is the raw component-property key `setProperties` expects; `associatedLayerName` lets Step 4 bind a boolean to a Step 3'-walked element by name. This **replaces** parsing booleans + resolving bindings by raw key in a live walk.
+   - `SLOT_CONTENTS` = `render-meta.slotContents[]` (`{ slotName, slotNodeType, preferredComponents: [{ componentId, componentName, componentSetId, isComponentSet, ... }] }`) — resolves slot preferred instances **without** the old cross-page `findAll` search.
+   - `SUB_COMPONENTS` = `render-meta.subComponents[]` (`{ name, mainComponentName, subCompSetId, subCompVariantAxes, subCompVariantAxesDefaults, booleanOverrides }`) — the constitutive sub-components that become Step 8b child sections; `subCompSetId` is the child node id.
+   - `FILE_KEY` = `render-meta.fileKey`, `NODE_ID` = `render-meta.nodeId` — for the Step 11 completion link and template placement.
+   - `SOURCE_HASH` = `render-meta.sourceHash` — recorded in the Step 11 provenance footer so drift between this annotation and the underlying `_base.json` is detectable.
+
+**FORBIDDEN — do NOT run the full extraction.** When the component `.md` is present (it always is past Step 0), you MUST NOT run the legacy full-tree extraction. Specifically:
+- The old Step 3 extraction script — the one that parsed `componentPropertyDefinitions` for `variantAxes` / `booleanProps` / `instanceSwapProps`, resolved boolean bindings by raw key, and ran a cross-page `findAll` to resolve slot `preferredValues` — is **deleted**. It does not exist in this skill anymore. Do NOT reintroduce it.
+- Do NOT re-derive `variantAxes`, `variantAxesDefaults`, `booleanDefs`, slot preferred components, or sub-component identity from a live walk — they are seeded from `render-meta` (Step 0.3).
+- The ONLY live read of the component tree permitted before rendering is the **bounded minimal walk in Step 3'** below, whose scope is explicitly whitelisted. The render scripts (Steps 8 / 8b) make their own live reads of the rendered instance — those are unchanged and still allowed.
 
 ### Step 1: Verify MCP Connection
 
@@ -81,20 +116,29 @@ Read the file `uspecs.config.json` and extract:
 If the template key is empty, tell the user:
 > The anatomy template key is not configured. Run {{skill:firstrun}} with your Figma template library link first.
 
-### Step 3: Extract Anatomy Data
+### Step 3': Seed from `render-meta` + run the bounded minimal live walk
 
-Navigate to the component file and run the extraction script via `figma_execute`.
+The element model is built in two parts: a **`render-meta` seed** (already parsed in Step 0) and a **bounded minimal live walk** that supplies only the facts `render-meta` cannot.
 
-**Extract the node ID from the URL:** Figma URLs contain `node-id=123-456` → use `123:456`.
+**Seed (from `render-meta`, no Figma reads):**
+- `SUB_COMPONENTS` (`render-meta.subComponents[]`) — constitutive sub-components and their `subCompSetId`; drives the Step 8b child sections with no live identity resolution.
+- `SLOT_CONTENTS` (`render-meta.slotContents[]`) — each slot's preferred components with their `componentId`; replaces the old cross-page `findAll` preferred-instance search.
+- `BOOLEAN_DEFS` (`render-meta.booleanDefs[]`) — boolean properties and their `associatedLayerName`; replaces parsing `componentPropertyDefinitions` and resolving boolean bindings by raw key.
 
-This produces a **pre-classified element array** with deterministic element types, resolved prop bindings, and unwrapped instance wrappers — no AI reasoning needed for classification. See the output contract after the script for field documentation.
+**Bounded minimal live walk (ONE `figma_execute`).** This walk is **NOT** the old full extraction. It visits **only**:
+- (a) the **direct children** of the chosen variant's child container — to classify them (`instance` / `instance-unwrapped` / `text` / `slot` / `container` / `structural`) and capture their live layer **names** (so marker name-match in Step 8 works directly), node types, visibility, and seed bboxes;
+- (b) the **chosen variant** — picking the richest variant (returned as `selectedVariantId`) when the default variant is structurally thin, mirroring the old richest-variant fallback;
+- (c) **slot default children** — the immediate children already sitting in each `SLOT` node of the chosen variant (to know what populates a slot by default);
+- (d) **wrapper visuals** — the root variant's fills/strokes/effects (`rootVariantVisuals`), the frames traversed to reach the child container (`traversedFrames`), and `childContainerIsVariant`, so Step 4 can insert synthetic elements for skipped visual layers.
 
-**Wrapper traversal sync warning:** The single-child auto-layout / SLOT / background-rect traversal logic appears in three places — the extraction script below, the Step 8 composition artwork script, and the Step 8b per-child artwork script — and must stay in sync.
+It does **nothing else**: no property-definition parsing, no boolean-binding resolution, no cross-page component search, and no recursion into instance internals (that is Step 8b's job). Boolean defs, variant axes, slot preferred components, and sub-component identity all come from the `render-meta` seed — not from this walk.
 
-Run this extraction script, replacing `TARGET_NODE_ID` with the actual node ID and `__PREFERRED_VARIANT_PROPS__` with `null` for the initial extraction (or a variant property object like `{ "variant": "count-forward" }` when re-extracting after Step 4 sub-step 0 identifies a richer variant):
+**Wrapper traversal sync warning:** The single-child auto-layout / SLOT / background-rect traversal logic appears in three places — the Step 3' walk below, the Step 8 composition artwork script, and the Step 8b per-child artwork script — and must stay in sync.
+
+Run this walk via `figma_execute`, replacing `__COMP_SET_NODE_ID__` with `render-meta.component.compSetNodeId` (= `COMP_SET_ID`) and `__PREFERRED_VARIANT_PROPS__` with `null` for the initial walk (or a variant property object like `{ "variant": "count-forward" }` when re-walking after Step 4 sub-step 0 identifies a richer variant from `render-meta.variantAxes`):
 
 ```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
+const TARGET_NODE_ID = '__COMP_SET_NODE_ID__';
 const PREFERRED_VARIANT_PROPS = __PREFERRED_VARIANT_PROPS__;
 const STRUCTURAL_TYPES = ['RECTANGLE', 'VECTOR', 'ELLIPSE', 'LINE', 'POLYGON', 'STAR', 'BOOLEAN_OPERATION'];
 
@@ -327,72 +371,6 @@ for (const child of childContainer.children) {
   elements.push(await extractElement(child, idx++, absX, absY));
 }
 
-const propDefs = node.componentPropertyDefinitions || {};
-const booleanProps = [];
-const variantAxes = [];
-const instanceSwapProps = [];
-
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  const cleanKey = rawKey.split('#')[0];
-  if (def.type === 'VARIANT') {
-    variantAxes.push({ name: cleanKey, options: def.variantOptions || [], defaultValue: def.defaultValue });
-  } else if (def.type === 'BOOLEAN') {
-    let associatedLayer = null;
-    let boundElementIndex = null;
-    const defaultVariantProps = variant.componentProperties;
-    if (defaultVariantProps) {
-      for (const [k, v] of Object.entries(defaultVariantProps)) {
-        if (k.split('#')[0] === cleanKey && v.type === 'BOOLEAN') {
-          const nodeIdSuffix = k.split('#')[1];
-          if (nodeIdSuffix) {
-            try {
-              const lid = variant.id.split(';')[0] + ';' + nodeIdSuffix;
-              const layerNode = await figma.getNodeByIdAsync(lid);
-              if (layerNode) {
-                associatedLayer = layerNode.name;
-                for (const el of elements) {
-                  const matchName = el.originalName || el.name;
-                  if (matchName === layerNode.name) {
-                    boundElementIndex = el.index;
-                    break;
-                  }
-                }
-              }
-            } catch {}
-          }
-        }
-      }
-    }
-    if (boundElementIndex === null) {
-      for (const el of elements) {
-        const matchName = el.originalName || el.name;
-        if (matchName.toLowerCase() === cleanKey.toLowerCase()) {
-          boundElementIndex = el.index;
-          if (!associatedLayer) associatedLayer = matchName;
-          break;
-        }
-      }
-    }
-    booleanProps.push({ name: cleanKey, defaultValue: def.defaultValue, associatedLayer, rawKey, boundElementIndex });
-  } else if (def.type === 'INSTANCE_SWAP') {
-    let swapTargetName = def.defaultValue;
-    try {
-      const swapNode = await figma.getNodeByIdAsync(def.defaultValue);
-      if (swapNode) swapTargetName = swapNode.name;
-    } catch {}
-    instanceSwapProps.push({ name: cleanKey, defaultValue: swapTargetName, rawKey });
-  }
-}
-
-for (const bp of booleanProps) {
-  if (bp.boundElementIndex !== null) {
-    const el = elements.find(e => e.index === bp.boundElementIndex);
-    if (el) {
-      el.controlledByBoolean = { propName: bp.name, rawKey: bp.rawKey, defaultValue: bp.defaultValue };
-    }
-  }
-}
-
 for (const el of elements) {
   if (el.classification === 'instance' || el.classification === 'instance-unwrapped') {
     el.shouldCreateSection = true;
@@ -403,30 +381,12 @@ for (const el of elements) {
   }
 }
 
-// --- Resolve slot preferred instances and boolean bindings ---
-const slotPropDefs = {};
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  if (def.type === 'SLOT') {
-    slotPropDefs[rawKey] = def;
-  }
-}
-
-const allCompKeys = new Map();
-if (Object.values(slotPropDefs).some(d => d.preferredValues && d.preferredValues.length > 0)) {
-  for (const page of figma.root.children) {
-    try { await figma.setCurrentPageAsync(page); } catch { continue; }
-    const comps = page.findAll(n => n.type === 'COMPONENT' || n.type === 'COMPONENT_SET');
-    for (const c of comps) {
-      if (c.key) allCompKeys.set(c.key, c);
-      if (c.type === 'COMPONENT_SET' && 'children' in c) {
-        for (const v of c.children) { if (v.type === 'COMPONENT' && v.key) allCompKeys.set(v.key, v); }
-      }
-    }
-  }
-  let _rp = variant; while (_rp.parent && _rp.parent.type !== 'DOCUMENT') _rp = _rp.parent;
-  if (_rp.type === 'PAGE') await figma.setCurrentPageAsync(_rp);
-}
-
+// --- Slot default children only (scope (c)) ---
+// Boolean defs, slot preferred components, variant axes, and sub-component identity are
+// SEEDED from render-meta (Step 0.3). This walk does NOT parse componentPropertyDefinitions
+// and does NOT run a cross-page findAll for preferred values. For each direct-child SLOT it
+// reads only the slot's existing default children plus the slot's own visibility binding;
+// Step 4 cross-references render-meta.booleanDefs / render-meta.slotContents by name.
 for (const el of elements) {
   if (el.classification !== 'slot') continue;
   const slotNode = childContainer.children[el.index - 1];
@@ -434,37 +394,7 @@ for (const el of elements) {
 
   const cpRefs = slotNode.componentPropertyReferences || {};
   if (cpRefs.visible) {
-    const visRawKey = cpRefs.visible;
-    const visClean = visRawKey.split('#')[0];
-    el.slotBooleanBinding = { propName: visClean, rawKey: visRawKey };
-    if (!el.controlledByBoolean) {
-      const bp = booleanProps.find(b => b.rawKey === visRawKey);
-      if (bp) el.controlledByBoolean = { propName: bp.name, rawKey: bp.rawKey, defaultValue: bp.defaultValue };
-    }
-  }
-
-  const slotName = slotNode.name;
-  let matchedSlotDef = null;
-  for (const [rawKey, def] of Object.entries(slotPropDefs)) {
-    if (rawKey.split('#')[0] === slotName) { matchedSlotDef = def; break; }
-  }
-  if (matchedSlotDef && matchedSlotDef.preferredValues && matchedSlotDef.preferredValues.length > 0) {
-    el.slotPreferredInstances = [];
-    for (const pv of matchedSlotDef.preferredValues) {
-      if (pv.type !== 'COMPONENT') continue;
-      const compNode = allCompKeys.get(pv.key);
-      if (compNode) {
-        const isSet = compNode.parent && compNode.parent.type === 'COMPONENT_SET';
-        el.slotPreferredInstances.push({
-          componentKey: pv.key,
-          componentName: compNode.name,
-          componentId: compNode.id,
-          isComponentSet: isSet,
-          componentSetId: isSet ? compNode.parent.id : null,
-          componentSetName: isSet ? compNode.parent.name : compNode.name
-        });
-      }
-    }
+    el.slotBooleanBinding = { propName: cpRefs.visible.split('#')[0], rawKey: cpRefs.visible };
   }
 
   if ('children' in slotNode && slotNode.children.length > 0) {
@@ -497,57 +427,56 @@ return {
   isComponentSet,
   rootSize: { w: Math.round(variant.width), h: Math.round(variant.height) },
   elements,
-  booleanProps,
-  variantAxes,
-  instanceSwapProps,
   rootVariantVisuals,
   traversedFrames,
   childContainerIsVariant: childContainer === variant
 };
 ```
 
-Save the returned JSON — you will use `componentName`, `compSetNodeId`, `selectedVariantId`, `isComponentSet`, `rootSize`, `elements`, `booleanProps`, `variantAxes`, `instanceSwapProps`, `rootVariantVisuals`, `traversedFrames`, and `childContainerIsVariant` in subsequent steps. `selectedVariantId` is the variant that was actually used for extraction — it may differ from the default variant if `PREFERRED_VARIANT_PROPS` was set (agent-directed re-extraction from Step 4 sub-step 0) or if the default produced 0 elements and the script fell back to the richest variant.
+Save the returned JSON — you will use `componentName`, `compSetNodeId`, `selectedVariantId`, `isComponentSet`, `rootSize`, `elements`, `rootVariantVisuals`, `traversedFrames`, and `childContainerIsVariant` in subsequent steps. The walk no longer returns `booleanProps`, `variantAxes`, or `instanceSwapProps` — those come from the `render-meta` seed (`BOOLEAN_DEFS`, `VARIANT_AXES`, etc.) parsed in Step 0. `selectedVariantId` is the variant the walk actually used — it may differ from the default variant if `PREFERRED_VARIANT_PROPS` was set (agent-directed re-walk from Step 4 sub-step 0) or if the default produced 0 elements and the walk fell back to the richest variant.
 
 Each element carries pre-resolved fields:
 - `classification` — closed enum: `instance`, `instance-unwrapped`, `text`, `slot`, `container`, `structural`
-- `name` — the designer-facing layer name. For `instance-unwrapped`, this is the wrapper frame's name (e.g., "Thumb"), not the inner component's name. For `text` classification from a FRAME-wrapped TEXT node, this is the FRAME name (e.g., "Label"). The inner component name is available in `wrappedInstance.componentSetName`.
-- `controlledByBoolean` — `{ propName, rawKey, defaultValue }` or `null` (resolved by element index, not name matching)
+- `name` — the live, designer-facing layer name (this is the marker name-match key used in Step 8). For `instance-unwrapped`, this is the wrapper frame's name (e.g., "Thumb"), not the inner component's name. For `text` classification from a FRAME-wrapped TEXT node, this is the FRAME name (e.g., "Label"). The inner component name is available in `wrappedInstance.componentSetName`.
+- `controlledByBoolean` — `{ propName, rawKey, defaultValue }` or `null`. **Not produced by the walk** — Step 4 sets it by matching `render-meta.booleanDefs[].associatedLayerName` (or `key`) to the element's live `name`/`originalName`.
 - `wrappedInstance` — component info for the inner INSTANCE (only on `instance-unwrapped` elements): includes `componentSetName` (the inner component's name used by Step 8b for child section creation)
 - `originalName` — the FRAME name before unwrapping (on `instance-unwrapped` and FRAME-wrapped `text` elements)
 - `shouldCreateSection` — `true` for `instance`/`instance-unwrapped`, `false` for utility names and other types
-- `childVariantAxes`, `childVariantCount` — variant data from the child component set
 - `slotBooleanBinding` — `{ propName, rawKey }` or absent. Present on `slot` elements when the slot's `componentPropertyReferences.visible` points to a boolean property.
-- `slotPreferredInstances[]` — array of `{ componentKey, componentName, componentId, isComponentSet, componentSetId, componentSetName }` or absent. Present on `slot` elements when the parent component defines `preferredValues` for this slot.
-- `slotDefaultChildren[]` — array of `{ name, nodeType, visible, mainComponentId?, mainComponentKey?, componentSetName?, componentSetId?, isComponentSet? }` or absent. Present on `slot` elements that contain children in the default variant. Used to identify what content populates the slot by default.
+- `slotDefaultChildren[]` — array of `{ name, nodeType, visible, mainComponentId?, mainComponentKey?, componentSetName?, componentSetId?, isComponentSet? }` or absent. Present on `slot` elements that contain children in the chosen variant. Used to identify what content populates the slot by default.
 
-Additional extraction-level fields:
+**Slot preferred components are NOT walked.** Where the old extraction ran a cross-page `findAll` to build `slotPreferredInstances[]`, you now read `render-meta.slotContents[]` (the `SLOT_CONTENTS` seed). In Step 4, match each `slot` element's `name` to `SLOT_CONTENTS[].slotName` and set `slotPreferredComponentId` / `populateWith` from `preferredComponents[].componentId`. Sub-component identity for child sections likewise comes from `render-meta.subComponents[].subCompSetId`, not from a live walk.
+
+Additional walk-level fields:
 - `rootVariantVisuals` — `{ hasFills, hasStrokes, hasEffects, cornerRadius }` for the root variant frame. When `hasFills` or `hasEffects` is true, the variant has visual properties. Step 4 should fold these into the root container's note when a container synthetic is already being created, or insert a standalone synthetic backplate/statelayer element when no container synthetic covers the root variant. `hasStrokes` is included for informational purposes (to enrich the root container note with border details) but does NOT trigger a separate synthetic element — strokes on the root variant are a border property of the container frame.
 - `traversedFrames[]` — Frames the `resolveChildContainer` traversal walked through to reach the child container. Each entry has `{ name, nodeType, hasFills, hasStrokes, hasEffects, cornerRadius, bbox }`. Frames with fills, strokes, or effects are visually meaningful and should be inserted as synthetic elements by Step 4.
-- `childContainerIsVariant` — `true` when `resolveChildContainer` resolved to the variant itself (no wrapper traversal). `false` when it traversed into a child frame, meaning the root component container was skipped during extraction. When `false`, Step 4 should insert a synthetic element for the root container regardless of whether it has visual properties.
+- `childContainerIsVariant` — `true` when `resolveChildContainer` resolved to the variant itself (no wrapper traversal). `false` when it traversed into a child frame, meaning the root component container was skipped by the walk. When `false`, Step 4 should insert a synthetic element for the root container regardless of whether it has visual properties.
 
-The `fullTree` field has been removed. Classification, instance-wrapper detection, and prop binding are now handled deterministically in the extraction script itself.
+The `fullTree` field has been removed. Classification and instance-wrapper detection are handled by the Step 3' walk; boolean bindings and slot preferred components come from the `render-meta` seed (resolved in Step 4 by name).
 
-### Step 4: Validate Extraction and Enrich Notes (AI Reasoning)
+### Step 4: Validate Seed + Walk and Enrich Notes (AI Reasoning)
 
-This is a pure reasoning step — no `figma_execute` calls unless a re-extraction is needed (sub-step 0). The extraction script (Step 3) has already performed classification, instance-wrapper unwrapping, boolean binding, and section eligibility. Step 4 focuses on **variant evaluation**, **validation**, and **semantic note-writing**.
+This is a pure reasoning step — no `figma_execute` calls unless a re-walk is needed (sub-step 0). The Step 3' minimal walk has already performed classification and instance-wrapper unwrapping; the `render-meta` seed supplies variant axes, boolean defs, slot preferred components, and sub-component identity. Step 4 focuses on **variant evaluation**, **validation**, **seed↔element binding**, and **semantic note-writing**.
 
-Read the instruction file `{{ref:anatomy/agent-anatomy-instruction.md}}`, then enrich the extraction data in-memory before proceeding to rendering.
+Read the instruction file `{{ref:anatomy/agent-anatomy-instruction.md}}`, then enrich the seeded + walked data in-memory before proceeding to rendering.
 
 **Process:**
 
-0. **Evaluate variant selection**: If `isComponentSet` is true and `elements.length` is small (1–2 elements), review `variantAxes` option names for a structurally richer variant. If a clearly richer variant exists (option names suggest additional sub-components, e.g., "count-forward" adds a count badge to "forward"), re-run the Step 3 extraction script with `PREFERRED_VARIANT_PROPS` set to the target variant's property values and replace all Step 3 output data. Do NOT re-extract for purely stylistic differences (color, size, theme). See `{{ref:anatomy/agent-anatomy-instruction.md}}` sub-step 0 for the full evaluation rules.
+0. **Evaluate variant selection**: If `isComponentSet` is true and `elements.length` is small (1–2 elements), review `render-meta.variantAxes` option names for a structurally richer variant. If a clearly richer variant exists (option names suggest additional sub-components, e.g., "count-forward" adds a count badge to "forward"), re-run the Step 3' minimal walk with `PREFERRED_VARIANT_PROPS` set to the target variant's property values and replace all Step 3' walk output. Do NOT re-walk for purely stylistic differences (color, size, theme). See `{{ref:anatomy/agent-anatomy-instruction.md}}` sub-step 0 for the full evaluation rules.
 
 1. **Read** `{{ref:anatomy/agent-anatomy-instruction.md}}` for note-writing guidelines, validation checklist, and unhide strategy rules.
 
-2. **Validate** the pre-classified extraction data per the instruction file's validation checklist.
+2. **Validate** the classified walk data per the instruction file's validation checklist.
 
-2b. **Detect skipped visual layers and root container**: Check `childContainerIsVariant`, `rootVariantVisuals`, and `traversedFrames` from the extraction output. When `childContainerIsVariant` is `false`, always insert a synthetic element for the root container. When `childContainerIsVariant` is `true`, evaluate whether the root container is architecturally meaningful (e.g., hosts composable slots, manages conditional visibility) and insert a synthetic element if so — skip it when the container is a self-evident stack of same-type sub-components. Root variant fills/effects (NOT strokes — strokes are described in the container note) are folded into the container's note when a container synthetic already exists, or inserted as standalone synthetic elements when no container synthetic covers the root variant. Also insert synthetic elements for traversed frames with fills/strokes/effects. See `{{ref:anatomy/agent-anatomy-instruction.md}}` sub-step 1b for the full procedure and examples.
+2b. **Detect skipped visual layers and root container**: Check `childContainerIsVariant`, `rootVariantVisuals`, and `traversedFrames` from the Step 3' walk output. When `childContainerIsVariant` is `false`, always insert a synthetic element for the root container. When `childContainerIsVariant` is `true`, evaluate whether the root container is architecturally meaningful (e.g., hosts composable slots, manages conditional visibility) and insert a synthetic element if so — skip it when the container is a self-evident stack of same-type sub-components. Root variant fills/effects (NOT strokes — strokes are described in the container note) are folded into the container's note when a container synthetic already exists, or inserted as standalone synthetic elements when no container synthetic covers the root variant. Also insert synthetic elements for traversed frames with fills/strokes/effects. See `{{ref:anatomy/agent-anatomy-instruction.md}}` sub-step 1b for the full procedure and examples.
 
-3. **Set unhide strategy** for hidden elements per the instruction file's Property-Aware Unhide Decisions section.
+2c. **Bind `render-meta.booleanDefs` to walked elements**: For each entry in `BOOLEAN_DEFS` (`render-meta.booleanDefs[]`), match its `associatedLayerName` (fall back to `key.split('#')[0]`) against each element's live `name`/`originalName`. On a match, set `el.controlledByBoolean = { propName: key.split('#')[0], rawKey: key, defaultValue: default }`. This replaces the boolean-binding loop the old extraction ran inside the walk.
+
+3. **Set unhide strategy** for hidden elements per the instruction file's Property-Aware Unhide Decisions section. Boolean-gated elements use the `controlledByBoolean` set in sub-step 2c; their `unhideStrategy.method === 'boolean'` carries `booleanRawKey = controlledByBoolean.rawKey` (= the `render-meta.booleanDefs[].key`).
 
 3b. **Detect inline markers**: For each element, determine whether it should use an inline marker (marker sits directly on the element's nearest edge with a short stub line) or a perimeter marker (standard marker outside the artwork). Elements nested inside another annotated element (e.g., slot default children that are also annotated) get `inlineMarker: true`. See `{{ref:anatomy/agent-anatomy-instruction.md}}` for the detection rules.
 
-3c. **Enrich slot preferred instances**: For each `slot` element that has `slotPreferredInstances`, enrich notes to mention the preferred component names. If the slot has `slotDefaultChildren`, mention the default content. For empty/hidden slots with preferred instances, mark the slot for artwork population (set `populateSlot: true` and `populateWith` to the first preferred instance). See `{{ref:anatomy/agent-anatomy-instruction.md}}` for the enrichment rules.
+3c. **Resolve + enrich slot preferred instances from the seed**: For each `slot` element, match its live `name` to `SLOT_CONTENTS[].slotName` (`render-meta.slotContents[]`). When a match has `preferredComponents`, set `slotPreferredComponentId` to the first preferred component's `componentId` and enrich notes to mention the preferred component name(s). If the slot has `slotDefaultChildren` (from the walk), mention the default content. For empty/hidden slots with a preferred component, mark the slot for artwork population (set `populateSlot: true` and `populateWith` to `{ componentId }` from the seed). This replaces the old `slotPreferredInstances` cross-page lookup. See `{{ref:anatomy/agent-anatomy-instruction.md}}` for the enrichment rules.
 
 4. **Rewrite** the `notes` field for each element following the instruction file's note-writing guidelines.
 
@@ -563,10 +492,10 @@ The enriched `elements` array (with updated `notes`, `unhideStrategy`, `count`, 
 
 ### Step 5: Navigate to Destination
 
-If the user provided a separate destination file URL:
+If the user provided a separate destination file URL (placement hint only — never a source of structural facts):
 - `figma_navigate` — Switch to the destination file
 
-If no destination was provided, stay in the current file.
+If no destination was provided, stay in the current file and place the annotation beside the component identified by `render-meta.component.compSetNodeId`.
 
 ### Step 6: Import and Detach Template
 
@@ -612,7 +541,7 @@ figma.viewport.scrollAndZoomIntoView([frame]);
 return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
 ```
 
-Replace `__COMPONENT_NAME__` with the extracted `componentName`. Replace `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL (same as `TARGET_NODE_ID` from Step 3).
+Replace `__COMPONENT_NAME__` with `render-meta.component.componentName` (= `COMPONENT_NAME`). Replace `__COMPONENT_NODE_ID__` with `render-meta.component.compSetNodeId` (= `COMP_SET_ID`, the same node the Step 3' walk targeted).
 
 Save the returned `frameId` — you need it for all subsequent steps.
 
@@ -677,7 +606,7 @@ Save the returned `compositionSectionId` — you need it for Step 8.
 
 ### Step 8: Build Composition Artwork with Markers + Fill Table
 
-Run via `figma_execute`. Replace `__COMPOSITION_SECTION_ID__`, `__COMP_SET_NODE_ID__`, `__SELECTED_VARIANT_ID__`, `__IS_COMPONENT_SET__`, the `elements` array, and `__BOOLEAN_UNHIDES_JSON__` with the enriched data from Step 4. Use the `compositionSectionId` from Step 7 to scope lookups. `__SELECTED_VARIANT_ID__` is the `selectedVariantId` returned by Step 3 — it may differ from the default variant. `__BOOLEAN_UNHIDES_JSON__` is an array of `{ booleanRawKey }` objects from elements whose `unhideStrategy.method === 'boolean'` — these booleans are toggled via `setProperties` instead of direct unhide. Pass `[]` if no boolean-controlled hidden elements exist. Fonts are loaded in two phases: (1) template fonts from marker and section text nodes, and (2) instance fonts via `loadAllFonts` after `createInstance`, after `setProperties`, and after slot population — this catches fonts used by component instances (e.g., "Uber Move") that differ from the template font. No `__FONT_FAMILY__` replacement needed.
+Run via `figma_execute`. Replace `__COMPOSITION_SECTION_ID__`, `__COMP_SET_NODE_ID__`, `__SELECTED_VARIANT_ID__`, `__IS_COMPONENT_SET__`, the `elements` array, and `__BOOLEAN_UNHIDES_JSON__` with the seed + enriched walk data. `__COMP_SET_NODE_ID__` = `render-meta.component.compSetNodeId` (= `COMP_SET_ID`); `__IS_COMPONENT_SET__` = `render-meta.component.isComponentSet`. Use the `compositionSectionId` from Step 7 to scope lookups. `__SELECTED_VARIANT_ID__` is the `selectedVariantId` returned by the Step 3' walk — it may differ from the default variant. `__BOOLEAN_UNHIDES_JSON__` is an array of `{ booleanRawKey }` objects from elements whose `unhideStrategy.method === 'boolean'` — `booleanRawKey` is the `render-meta.booleanDefs[].key`. These booleans are toggled via `setProperties` instead of direct unhide. Pass `[]` if no boolean-controlled hidden elements exist. Element marker names come from the Step 3' walk's live `name`/`originalName`, so the artwork's name-match resolves directly against the rendered instance — there is no name-mismatch problem here. Fonts are loaded in two phases: (1) template fonts from marker and section text nodes, and (2) instance fonts via `loadAllFonts` after `createInstance`, after `setProperties`, and after slot population — this catches fonts used by component instances (e.g., "Uber Move") that differ from the template font. No `__FONT_FAMILY__` replacement needed.
 
 **Artwork** (`#preview`): Place a component instance with hidden children made visible via property-aware unhide, then clone `#marker-example` for each element with connecting lines using the nearest-edge + collision avoidance algorithm. Elements with `inlineMarker: true` get a short stub line on their nearest edge instead of a perimeter marker. Elements with `populateSlot: true` get the preferred component inserted directly into the SLOT node via `appendChild`; if slot insertion fails, fall back to a ghost instance at the slot's bbox position. The `elements` array may contain synthetic elements (`isSynthetic: true`) inserted by Step 4 — these include the root component container (when `childContainerIsVariant` is false) and any visually-meaningful skipped layers. Synthetic elements are skipped in the child-index-to-bbox loop (they have no corresponding child node), but their bboxes are updated by a separate reflow-update block that runs after all mutations — this block re-reads `compInstance.width`/`compInstance.height`, recalculates artwork dimensions, re-centers the instance, and updates synthetic bboxes to match the post-reflow component size.
 
@@ -1123,13 +1052,13 @@ return { success: true };
 
 ### Step 8b: Per-Sub-Component Child Sections
 
-For each direct child that is an `INSTANCE` node (has `mainComponentId` or `mainComponentSetId` in the extraction data), **an instance-wrapper FRAME** (has `wrappedInstance` set during Step 4 reasoning), **or a slot element with a preferred instance** (has `slotPreferredComponentId` set during Step 4 reasoning), create a standalone anatomy section showing that child's internal structure. The script starts with the default variant but **falls back to the richest variant** (most direct children) when the default has 1 or fewer children and the component set has multiple variants. All hidden descendants are made visible.
+For each direct child that is an `INSTANCE` node (has `mainComponentId` or `mainComponentSetId` from the Step 3' walk), **an instance-wrapper FRAME** (has `wrappedInstance` set by the walk), **or a slot element with a preferred instance** (has `slotPreferredComponentId` set during Step 4 sub-step 3c from `render-meta.slotContents`), create a standalone anatomy section showing that child's internal structure. Sub-component identity can also be taken directly from the `SUB_COMPONENTS` seed (`render-meta.subComponents[].subCompSetId`) for constitutive children. The script starts with the default variant but **falls back to the richest variant** (most direct children) when the default has 1 or fewer children and the component set has multiple variants. All hidden descendants are made visible — this internal child walk is preserved and is the allowed mechanism for resolving a sub-component's own elements.
 
 Skip this step entirely if no child elements have `nodeType === 'INSTANCE'`, no instance-wrapper FRAMEs, and no slot elements with `slotPreferredComponentId` were identified in Step 4. Additionally, **check `shouldCreateSection`** on each eligible child (set during Step 4 reasoning) — skip the `figma_execute` call entirely for any child where `shouldCreateSection === false`. These are utility or trivially simple sub-components (Spacer, Divider, structural-only, etc.) that don't warrant a dedicated section. The `gcElements.length <= 1` guard in the JavaScript remains as a runtime safety net, but the agent should avoid even calling `figma_execute` for ineligible children.
 
 **Deduplicate by component set:** When multiple composition elements reference the same `mainComponentSetId`, create only one child section for that component set. Use the first element's data for section creation. This is particularly common with composable slot components where the slot contains multiple instances of the same sub-component (e.g., 4 buttons in a button group). For slot preferred instances, deduplicate against existing default children — if a slot's `slotPreferredComponentId` matches the `mainComponentId` of an existing direct instance child element that already has a section, skip it.
 
-For **each** eligible child element (`shouldCreateSection === true`), run via `figma_execute` (replace `__FRAME_ID__`, `__CHILD_NAME__`, `__CHILD_COMP_ID__`, `__CHILD_IS_COMP_SET__` with values from the extraction data). For direct INSTANCE children, use `mainComponentSetId` if `childIsComponentSet` is true, otherwise use `mainComponentId`. For **instance-wrapper FRAMEs**, use `wrappedInstance.mainComponentSetId` if `wrappedInstance.childIsComponentSet` is true, otherwise use `wrappedInstance.mainComponentId`. For **slot elements with preferred instances** (`classification === 'slot'` and `slotPreferredComponentId` is set), use `slotPreferredComponentId` as `__CHILD_COMP_ID__` — this is a local component node ID. Use `getNodeByIdAsync(slotPreferredComponentId)` to get the component, then check if its parent is a COMPONENT_SET to determine `__CHILD_IS_COMP_SET__`. Replace `__CHILD_BOOLEAN_PROPS_JSON__` with the child sub-component's boolean properties (extracted from its `componentPropertyDefinitions` during Step 4 reasoning). If the child has no boolean properties, pass `[]`. Fonts are loaded in two phases: (1) template fonts from marker and section text nodes, and (2) instance fonts via `loadAllFonts` after `createInstance` and after `directUnhide` — this catches fonts used by the sub-component instance that differ from the template font. No `__FONT_FAMILY__` replacement needed:
+For **each** eligible child element (`shouldCreateSection === true`), run via `figma_execute` (replace `__FRAME_ID__`, `__CHILD_NAME__`, `__CHILD_COMP_ID__`, `__CHILD_IS_COMP_SET__` with values from the walk + seed). For direct INSTANCE children, use `mainComponentSetId` if `childIsComponentSet` is true, otherwise use `mainComponentId` (both from the Step 3' walk; or use `render-meta.subComponents[].subCompSetId` for constitutive children). For **instance-wrapper FRAMEs**, use `wrappedInstance.mainComponentSetId` if `wrappedInstance.childIsComponentSet` is true, otherwise use `wrappedInstance.mainComponentId`. For **slot elements with preferred instances** (`classification === 'slot'` and `slotPreferredComponentId` is set), use `slotPreferredComponentId` as `__CHILD_COMP_ID__` — this is the `componentId` from `render-meta.slotContents[].preferredComponents[]`. Use `getNodeByIdAsync(slotPreferredComponentId)` to get the component, then check if its parent is a COMPONENT_SET to determine `__CHILD_IS_COMP_SET__`. Replace `__CHILD_BOOLEAN_PROPS_JSON__` with the child sub-component's boolean properties — take them from `render-meta.slotContents[].preferredComponents[].booleanDefs` (for slot-filled children) when available; otherwise pass `[]` and rely on `directUnhide` to surface hidden descendants. If the child has no boolean properties, pass `[]`. Fonts are loaded in two phases: (1) template fonts from marker and section text nodes, and (2) instance fonts via `loadAllFonts` after `createInstance` and after `directUnhide` — this catches fonts used by the sub-component instance that differ from the template font. No `__FONT_FAMILY__` replacement needed:
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -1653,7 +1582,7 @@ return { success: true };
 
 Replace `__CHILD_SECTION_ID__` with the returned `childSectionId` and `__ENRICHED_ELEMENTS_JSON__` with the enriched elements array (only `index` and `notes` fields are needed).
 
-Repeat for every eligible child element (`shouldCreateSection === true`) from the Step 3/4 data — this includes direct INSTANCE children, instance-wrapper FRAMEs with `wrappedInstance`, and slot elements with `slotPreferredComponentId`. Skip any child where `shouldCreateSection === false` — do not call `figma_execute` for it.
+Repeat for every eligible child element (`shouldCreateSection === true`) from the Step 3' walk + Step 4 data — this includes direct INSTANCE children, instance-wrapper FRAMEs with `wrappedInstance`, and slot elements with `slotPreferredComponentId`. Skip any child where `shouldCreateSection === false` — do not call `figma_execute` for it.
 
 After all per-child sections are processed, update the composition table's `#notes` cells: for each child (INSTANCE or instance-wrapper FRAME) that was **not** skipped (i.e., a section was created and `shouldCreateSection === true`), append ` — See <child name> anatomy section` to the existing notes text in the corresponding row. Do not add cross-references for skipped or ineligible children.
 
@@ -1672,11 +1601,19 @@ After all per-child sections are processed, update the composition table's `#not
    - Per-child section titles use designer-facing names
 3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
 
-### Step 11: Completion Link
+### Step 11: Completion Link + Provenance
 
-Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 6), replacing `:` with `-` in the node ID:
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from `render-meta.fileKey` (= `FILE_KEY`) and the `frameId` (returned by Step 6), replacing `:` with `-` in the node ID:
 
 ```
 Anatomy spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
 ```
+
+**Provenance footer.** Record the source-of-truth hash so drift between this annotation and the underlying `_base.json` is detectable. Append a footer line with `render-meta.sourceHash` (= `SOURCE_HASH`):
+
+```
+Source: {mdPath} (render-meta sourceHash {SOURCE_HASH})
+```
+
+If `SOURCE_HASH` is absent from `render-meta`, the `.md` predates the render-meta hash — note that the `.md` should be regenerated by re-running create-component-md.
 

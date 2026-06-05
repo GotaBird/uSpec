@@ -2,6 +2,8 @@
 // and handles download / copy-to-clipboard.
 
 import type { MsgFromSandbox, MsgFromUi, Preview, PreviewChild, UserClassification } from './types';
+import { safeStringify } from './sanitize';
+import { parseFigmaFileKey } from './figmaUrl';
 
 type State = {
   preview: Preview | null;
@@ -9,6 +11,8 @@ type State = {
   // `preview.children[*].classification` unless the user flips it.
   overrides: Map<string, 'constitutive' | 'referenced'>;
   optionalContext: string;
+  // Required Figma file link the user pastes (public plugins can't read figma.fileKey).
+  fileLink: string;
   lastBaseJson: unknown | null;
   lastFilename: string | null;
   extracting: boolean;
@@ -18,6 +22,7 @@ const state: State = {
   preview: null,
   overrides: new Map(),
   optionalContext: '',
+  fileLink: '',
   lastBaseJson: null,
   lastFilename: null,
   extracting: false,
@@ -26,12 +31,34 @@ const state: State = {
 const main = document.getElementById('main')!;
 const subtitle = document.getElementById('subtitle')!;
 const refreshBtn = document.getElementById('refreshBtn') as HTMLButtonElement;
-const copyBtn = document.getElementById('copyBtn') as HTMLButtonElement;
 const downloadBtn = document.getElementById('downloadBtn') as HTMLButtonElement;
+const fileLinkInput = document.getElementById('fileLinkInput') as HTMLInputElement;
 
 refreshBtn.addEventListener('click', () => post({ type: 'refresh-preview' }));
-downloadBtn.addEventListener('click', () => triggerExtract('download'));
-copyBtn.addEventListener('click', () => triggerExtract('copy'));
+downloadBtn.addEventListener('click', () => triggerExtract());
+fileLinkInput.addEventListener('input', () => {
+  state.fileLink = fileLinkInput.value;
+  updateButtons();
+});
+
+// A valid file link is required before extraction can run.
+function fileKeyValid(): boolean {
+  return parseFigmaFileKey(state.fileLink) !== null;
+}
+
+// Single source of truth for the Copy/Extract enabled state. Disabled unless there's
+// a preview, we're not mid-extract, and the pasted link resolves to a file key.
+function updateButtons(): void {
+  const valid = fileKeyValid();
+  const ready = !!state.preview && !state.extracting && valid;
+  downloadBtn.disabled = !ready;
+  fileLinkInput.classList.toggle('invalid', state.fileLink.trim().length > 0 && !valid);
+  if (state.preview && !state.extracting && !valid) {
+    subtitle.textContent = state.fileLink.trim()
+      ? "That doesn't look like a Figma link — paste the component's link to extract."
+      : 'Provide a link and select component to extract.';
+  }
+}
 
 window.addEventListener('message', (ev: MessageEvent) => {
   const raw = ev.data?.pluginMessage as MsgFromSandbox | undefined;
@@ -40,6 +67,12 @@ window.addEventListener('message', (ev: MessageEvent) => {
     case 'ready':
       state.preview = raw.preview;
       state.overrides.clear();
+      // Prefill the required link from the value remembered on the document, unless
+      // the user has already typed something this session.
+      if (raw.preview.savedFileLink && !state.fileLink) {
+        state.fileLink = raw.preview.savedFileLink;
+        fileLinkInput.value = state.fileLink;
+      }
       render();
       break;
     case 'no-selection':
@@ -64,14 +97,10 @@ window.addEventListener('message', (ev: MessageEvent) => {
   }
 });
 
-let pendingAction: 'download' | 'copy' = 'download';
-
-function triggerExtract(action: 'download' | 'copy'): void {
-  if (!state.preview || state.extracting) return;
-  pendingAction = action;
+function triggerExtract(): void {
+  if (!state.preview || state.extracting || !fileKeyValid()) return;
   state.extracting = true;
   downloadBtn.disabled = true;
-  copyBtn.disabled = true;
   subtitle.textContent = 'Extracting…';
 
   const classifications: UserClassification[] = state.preview.children
@@ -98,28 +127,20 @@ function triggerExtract(action: 'download' | 'copy'): void {
     type: 'extract',
     classifications,
     optionalContext: state.optionalContext || null,
+    fileLink: state.fileLink || null,
   });
 }
 
-async function handleExtractDone(warnings: string[]): Promise<void> {
+function handleExtractDone(warnings: string[]): void {
   state.extracting = false;
   const payload = state.lastBaseJson;
   const filename = state.lastFilename || '_base.json';
-  const serialized = JSON.stringify(payload, null, 2);
+  const serialized = safeStringify(payload);
 
   try {
-    if (pendingAction === 'download') {
-      downloadFile(filename, serialized);
-    } else {
-      await copyToClipboard(serialized);
-    }
+    downloadFile(filename, serialized);
     render();
-    appendLog(
-      `${pendingAction === 'download' ? 'Downloaded' : 'Copied'} ${filename} (${
-        serialized.length
-      } bytes)`,
-      'ok'
-    );
+    appendLog(`Downloaded ${filename} (${serialized.length} bytes)`, 'ok');
     if (warnings.length > 0) {
       for (const w of warnings) appendLog(w, 'err');
     }
@@ -131,8 +152,8 @@ async function handleExtractDone(warnings: string[]): Promise<void> {
     );
     subtitle.textContent = 'Delivery failed.';
   } finally {
-    downloadBtn.disabled = !state.preview;
-    copyBtn.disabled = !state.preview;
+    state.extracting = false;
+    updateButtons();
   }
 }
 
@@ -140,15 +161,13 @@ function handleExtractError(message: string): void {
   state.extracting = false;
   subtitle.textContent = 'Extraction failed.';
   appendLog(message, 'err');
-  downloadBtn.disabled = !state.preview;
-  copyBtn.disabled = !state.preview;
+  updateButtons();
 }
 
 function render(): void {
   if (!state.preview) {
     renderEmpty('Select a component or component set on the canvas.');
-    downloadBtn.disabled = true;
-    copyBtn.disabled = true;
+    updateButtons();
     return;
   }
 
@@ -156,8 +175,7 @@ function render(): void {
   subtitle.textContent = `${p.componentName} · ${p.variantCount} variant${
     p.variantCount === 1 ? '' : 's'
   } · default: ${p.defaultVariantName}`;
-  downloadBtn.disabled = state.extracting;
-  copyBtn.disabled = state.extracting;
+  updateButtons();
 
   main.innerHTML = '';
   const summary = document.createElement('div');
@@ -319,7 +337,7 @@ function renderEmpty(msg: string): void {
   el.className = 'empty';
   el.textContent = msg;
   main.appendChild(el);
-  subtitle.textContent = 'Select a component or component set to begin.';
+  subtitle.textContent = 'Provide a link and select component to extract.';
 }
 
 function renderProgress(phase: string, detail?: string): void {
@@ -353,28 +371,6 @@ function downloadFile(filename: string, contents: string): void {
     URL.revokeObjectURL(url);
     a.remove();
   }, 0);
-}
-
-async function copyToClipboard(contents: string): Promise<void> {
-  // Figma's plugin iframe is sandboxed; navigator.clipboard often throws "not focused".
-  // Fall back to a textarea + execCommand('copy') when needed.
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(contents);
-      return;
-    }
-  } catch {}
-  const ta = document.createElement('textarea');
-  ta.value = contents;
-  ta.style.position = 'fixed';
-  ta.style.opacity = '0';
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    document.execCommand('copy');
-  } finally {
-    ta.remove();
-  }
 }
 
 function escapeHtml(s: string): string {

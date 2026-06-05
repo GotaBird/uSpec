@@ -163,75 +163,48 @@ Having trouble creating a spec? Find solutions below based on where the issue oc
   </Tab>
 
   <Tab title="Figma Extract plugin" icon="puzzle-piece">
-    The **uSpec Extract** Figma plugin powers the Component Markdown path. It walks a selected component, captures every variant and token binding, and writes a single `_base.json` that `create-component-md` consumes. Use this tab when the plugin won't install, won't build, or runs but doesn't produce a usable file.
+    The **uSpec Extract** Figma plugin produces the Component Markdown source. It walks a selected component, captures every variant and token binding, and writes a single `_base.json` that `create-component-md` consumes. Use this tab when the plugin won't install, or runs but doesn't produce a usable file.
 
     <Note>
-      The plugin runs entirely inside Figma Desktop's plugin sandbox. It makes no network calls and stores nothing externally. If you can install it once, it will work offline thereafter.
+      The plugin runs entirely inside Figma Desktop's plugin sandbox. It makes no network calls and stores nothing externally. Once installed, it works offline thereafter.
     </Note>
 
     ### Install the plugin
 
-    Build the plugin locally and import it into Figma Desktop. Requires Node.js 18 or later.
+    Install it from the Figma Community — no local build required.
 
     <Steps>
-      <Step title="Clone the uSpec repository">
-        ```bash
-        git clone https://github.com/redongreen/uSpec.git
-        cd uSpec/figma-plugin
-        ```
+      <Step title="Open the Community plugin">
+        Go to [uSpec Extract](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) on the Figma Community.
       </Step>
-      <Step title="Install dependencies">
-        ```bash
-        npm install
-        ```
-
-        This installs `esbuild`, `ajv`, and the Figma plugin typings. Nothing else is fetched at runtime.
+      <Step title="Install it">
+        Click **Open in…** (or **Try it out**) to add it to your Figma. It then appears under **Plugins → uSpec Extract** in any file.
       </Step>
-      <Step title="Build the plugin bundle">
-        ```bash
-        npm run build
-        ```
-
-        The build writes `dist/code.js` and `dist/ui.html`. Both are referenced by `manifest.json`.
-      </Step>
-      <Step title="Import the manifest into Figma Desktop">
-        In Figma Desktop, go to **Plugins → Development → Import plugin from manifest…** and select `figma-plugin/manifest.json` from your local clone.
-      </Step>
-      <Step title="Run from the Development menu">
-        The plugin appears under **Plugins → Development → uSpec Extract**. Select a component on the canvas, then run it.
+      <Step title="Run it">
+        Select a `COMPONENT` or `COMPONENT_SET` on the canvas, then run **Plugins → uSpec Extract**.
       </Step>
     </Steps>
 
-    <Tip>
-      For active development, run `npm run build:watch` instead of `npm run build`. Figma reloads the plugin on next open after each rebuild, so no manual re-import is needed.
-    </Tip>
-
     <Check>
-      When **Plugins → Development → uSpec Extract** opens the plugin window, the dev install is complete.
+      When **Plugins → uSpec Extract** opens the plugin window, the install is complete.
     </Check>
+
+    <Tip>
+      The plugin is open source. To run a modified build, clone [`figma-plugin/`](https://github.com/redongreen/uSpec/tree/main/figma-plugin), run `npm install && npm run build` (Node.js 18+), then import `manifest.json` via **Plugins → Development → Import plugin from manifest…**. Use `npm run build:watch` for an iterative dev loop.
+    </Tip>
 
     ### Plugin issues
 
     <AccordionGroup>
-      <Accordion title="Plugin doesn't appear in Figma after import (dev install)">
-        **Symptom**: You imported `manifest.json` but **Plugins → Development → uSpec Extract** is missing or greyed out.
+      <Accordion title="Plugin doesn't appear in Figma after install">
+        **Symptom**: You installed from Community but **Plugins → uSpec Extract** is missing.
 
         **Solutions**:
-        - Confirm you imported the manifest from the project you actually built. The manifest references `dist/code.js` and `dist/ui.html` by relative path, so moving the manifest without the `dist/` folder breaks the link.
-        - Re-run `npm run build` and confirm `figma-plugin/dist/code.js` and `figma-plugin/dist/ui.html` exist.
-        - Restart Figma Desktop after importing. Some macOS installs need a full quit (`Cmd+Q`), not just closing the window.
-        - Confirm you're on **Figma Desktop**, not the browser. The Development menu only appears in the desktop app.
-        - If you have multiple Figma accounts, confirm the dev plugin was imported under the account you're currently signed in to.
-      </Accordion>
-
-      <Accordion title="Build fails with `npm run build`">
-        **Symptom**: `npm install` or `npm run build` errors out before producing `dist/code.js`.
-
-        **Solutions**:
-        - Confirm Node.js 18 or later. Older versions miss APIs `esbuild` 0.25 expects. Run `node --version` to check.
-        - Delete `node_modules/` and `package-lock.json` inside `figma-plugin/`, then run `npm install` again. Stale lockfiles from a different Node version cause silent failures.
-        - If the build complains about missing types, run `npm install` from inside `figma-plugin/`, not from the repo root. The plugin keeps its dependencies isolated.
-        - On Apple Silicon, if `esbuild` reports a binary mismatch, run `npm rebuild esbuild`.
+        - Confirm you're signed in to the same Figma account you installed the plugin under. Community plugins are tied to the account that added them.
+        - Re-open the [Community page](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) and click **Open in…** again to re-add it.
+        - Restart Figma after installing. Some installs need a full quit (`Cmd+Q` on macOS), not just closing the window.
+        - Right-click the canvas and check **Plugins → Manage plugins…** to confirm it's listed.
+        - If you built from source instead, you'll find it under **Plugins → Development → uSpec Extract** — confirm `dist/code.js` and `dist/ui.html` exist next to the manifest, and that you're on Figma Desktop (the Development menu only appears there).
       </Accordion>
 
       <Accordion title="Plugin runs but the canvas selection is rejected">
@@ -258,7 +231,7 @@ Having trouble creating a spec? Find solutions below based on where the issue oc
 
         **Solutions**:
         - Re-run the plugin and re-export. A stale file from a previous plugin version may not match the current schema.
-        - Confirm the plugin and the skill are on the same uSpec version. If you updated one without the other, the schema can drift. Run `git pull` in your local clone, then re-run `npm run build` if you're on the dev install.
+        - Confirm the plugin and the skill are on the same uSpec version. If you updated one without the other, the schema can drift. Re-install the plugin from [Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) to pick up the latest version (or `git pull` + `npm run build` if you run from source), and run `npx uspec-skills update` to refresh the skills.
         - Run the validator directly to see the full diagnostic:
 
           ```bash
@@ -299,9 +272,9 @@ If the agent's output is incomplete or doesn't match your expectations, the issu
 
 ### Output is incomplete or missing states
 
-The agent can only document what it can see in Figma or what you describe. If states, variants, or behaviors are missing from the output:
+A render skill can only document what the `.md` records or what you describe. If states, variants, or behaviors are missing, they were usually not captured when you generated the `.md`. Fix it at the source:
 
-- **Add them to your prompt**: explicitly list all states (enabled, hovered, pressed, disabled, selected, loading)
+- **Add context when generating the `.md`**: list all states (enabled, hovered, pressed, disabled, selected, loading) in the plugin's design-intent field or your `create-component-md` prompt, then regenerate
 - **Describe behavioral modes**: fill vs. hug width, truncation rules, multi-select behavior
 - **Mention invisible constraints**: tap target minimums, aspect ratios, focus order preferences
 
@@ -309,16 +282,16 @@ The agent can only document what it can see in Figma or what you describe. If st
 
 If the output has the right structure but lacks detail:
 
-- **Check your MCP connection**: ask your agent to verify the Figma connection (e.g., *"Check Figma status"* for Console MCP, or *"List pages in my file"* with a link for native MCP). If the connection is down, the agent can't read your component data
-- **Verify the Figma link**: make sure the node-id points to the actual component, not a parent frame
-- **Re-run with more context**: describe the component's parts and their relationships
+- **Check the `.md` is complete**: open the component `.md` and confirm the relevant section is populated. If it's thin, regenerate it with `create-component-md` and more context
+- **Check your MCP connection** (render skills only): ask your agent to verify the Figma connection (e.g., *"Check Figma status"* for Console MCP, or *"List pages in my file"* with a link for native MCP). If the connection is down, the agent can't render the frame
+- **Verify the render destination**: make sure any destination node-id points to where you want the annotation, not a parent frame
 
 ### Re-prompting strategies
 
 When the first output isn't quite right:
 
 1. **Identify what's missing**: Is it a state? A variant? A specific part?
-2. **Run the skill again** with additional context about the missing elements
+2. **Decide where it belongs**: if the `.md` is missing it, regenerate the `.md`; if only the render is off, re-run the render skill
 3. **Be specific**: instead of "include all states," say "include enabled, disabled, and loading states"
 
 <Note>

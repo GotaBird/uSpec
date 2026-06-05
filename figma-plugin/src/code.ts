@@ -25,8 +25,14 @@ import {
   snapshotComponentProperties,
 } from './safe';
 import { resolvePreferredComponent } from './resolveKey';
+import { sanitizeText } from './sanitize';
+import { parseFigmaFileKey, buildFigmaUrl } from './figmaUrl';
 
-const PLUGIN_VERSION = '2.4.0';
+// Document-scoped pluginData key under which the user's last Figma file link is
+// remembered, so the required link field can be prefilled on later runs.
+const FILE_LINK_PLUGIN_DATA_KEY = 'uspecFileLink';
+
+const PLUGIN_VERSION = '2.5.0';
 
 figma.showUI(__html__, { width: 420, height: 620, themeColors: true });
 
@@ -45,7 +51,7 @@ figma.ui.onmessage = async (msg: MsgFromUi) => {
     return;
   }
   if (msg.type === 'extract') {
-    await extract(msg.classifications, msg.optionalContext);
+    await extract(msg.classifications, msg.optionalContext, msg.fileLink);
     return;
   }
 };
@@ -420,6 +426,7 @@ async function sendPreview(): Promise<void> {
       defaultVariantName: defaultVariant.name,
       variantCount,
       children,
+      savedFileLink: figma.root.getPluginData(FILE_LINK_PLUGIN_DATA_KEY) || null,
     };
     figma.ui.postMessage({ type: 'ready', preview });
   } catch (err) {
@@ -432,13 +439,22 @@ async function sendPreview(): Promise<void> {
 
 async function extract(
   classifications: UserClassification[],
-  optionalContext: string | null
+  optionalContext: string | null,
+  fileLink: string | null
 ): Promise<void> {
   const target = getSelectedTarget();
   if (!target) {
     figma.ui.postMessage({ type: 'extract-error', message: 'Selection changed. Pick a component.' });
     return;
   }
+
+  // Resolve the file key: a public plugin can't read figma.fileKey, so the user's
+  // pasted link is the authoritative source. Remember it on the document for next time.
+  const linkKey = parseFigmaFileKey(fileLink);
+  if (linkKey && fileLink) {
+    figma.root.setPluginData(FILE_LINK_PLUGIN_DATA_KEY, fileLink);
+  }
+  const resolvedFileKey = linkKey || figma.fileKey || 'unknown-file';
 
   const warnings: string[] = [];
 
@@ -728,10 +744,14 @@ async function extract(
     const meta: BaseJsonMeta = {
       schemaVersion: '1',
       extractedAt: new Date().toISOString(),
-      fileKey: figma.fileKey || 'unknown-file',
+      fileKey: resolvedFileKey,
       nodeId: target.id,
       componentSlug,
-      optionalContext: optionalContext || null,
+      optionalContext: sanitizeText(optionalContext) || null,
+      figmaUrl:
+        resolvedFileKey !== 'unknown-file'
+          ? buildFigmaUrl(resolvedFileKey, figma.root.name, target.id)
+          : null,
       extractionSource: 'plugin',
       pluginVersion: PLUGIN_VERSION,
     };

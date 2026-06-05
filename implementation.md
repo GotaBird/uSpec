@@ -54,8 +54,9 @@
 
 uSpec generates documentation specifications for UI components. The system ships two rendering paths that share the same interpretation patterns but produce different artifacts:
 
-- **Figma-native path.** `create-*` skills extract data via a Figma MCP (Console or native) and render annotations directly in Figma using Plugin API JavaScript. Each spec type has its own template frame. The motion skill is an exception — it reads pre-computed data from an After Effects export script rather than inspecting Figma components.
-- **Component markdown path.** The `figma-plugin/` Figma Desktop plugin walks a component locally and emits a single `_base.json`. The `create-component-md` orchestrator runs four read-only `extract-*` interpreter skills against that file, reconciles their outputs, and renders one self-contained `.md` spec. The `.md` becomes the implementation source of truth; Figma is only the source of extraction.
+- **Figma-native path.** `create-*` skills render annotation frames directly into Figma using Plugin API JavaScript. Each spec type has its own template frame. **These skills now consume the `.md` source of truth** (`components/<slug>.md`, produced by the component-markdown path) rather than re-extracting from Figma: each `create-*` skill requires the `.md`, fails fast when it is missing, and renders from the `.md` body + its `render-meta` block — with at most a small, explicitly-whitelisted minimal live read per skill for the few facts neither the `.md` nor `render-meta` carries (e.g. `create-color`'s `getLocalVariableCollectionsAsync()` for mode IDs, `create-api`'s `<=30-line` TEXT-node listing for preview text, `create-property`'s variable-collection + variant-gated-boolean scans, `create-anatomy`'s bounded direct-child/richest-variant walk). They no longer run the old full extraction tree-walk. The motion skill is the one exception that never participated in this contract — see below.
+- **Component markdown path.** The `figma-plugin/` Figma Desktop plugin walks a component locally and emits a single `_base.json`. The `create-component-md` orchestrator runs four read-only `extract-*` interpreter skills against that file, reconciles their outputs, and renders one self-contained `.md` spec. The `.md` becomes the implementation source of truth; Figma is only the source of extraction. The render-meta appendix and (for voice) a hidden `voice-render-meta` focus-stop layer-name carry let the Figma-native `create-*` skills resolve sections/groups/focus markers back to live layers without re-extracting.
+- **Motion is out of scope of the `.md`-consumer contract.** `create-motion` reads a pre-computed After Effects timeline export (`references/motion/export-timeline.jsx` JSON) and never walks a Figma component, so there is no `_base.json`/`extract-motion`/`.md` Motion section to consume. It remains a standalone Figma-native renderer driven by the AE JSON input; it is intentionally excluded from the require-`.md`/fail-fast/whitelisted-reads refactor.
 
 Spec types currently supported (either path unless noted):
 
@@ -417,7 +418,7 @@ Agent Host          Figma MCP           Figma
 | Claude Code | `CLAUDE.md` | `.mcp.json` (project root) | `.claude/skills/` (only `firstrun` until user runs it) |
 | Codex | `AGENTS.md` | `.codex/config.toml` | `.agents/skills/` (only `firstrun` until user runs it) |
 
-Most skills extract component data via MCP, then render annotations directly in Figma using Plugin API JavaScript (`figma_execute` on Console MCP, `use_figma` on native MCP). Each skill imports its documentation template (by component key from `uspecs.config.json`), detaches it, and fills text fields, clones sections, and builds tables programmatically. The motion skill is different: its data comes from an After Effects export script (`motion/export-timeline.jsx`) that pre-computes segments, easing values, formatted labels, and `composition.durationMs`. Raw keyframes are stripped from the output — the JSON contains only segments. The agent passes segment data and `pxPerMs` to the Figma code, which computes bar positions at render time.
+Most skills now read their spec content from `components/<slug>.md` (require + fail-fast in each skill's Step 0), then render annotations directly in Figma using Plugin API JavaScript (`figma_execute` on Console MCP, `use_figma` on native MCP). Each skill imports its documentation template (by component key from `uspecs.config.json`), detaches it, and fills text fields, clones sections, and builds tables programmatically — sourcing the table data from the parsed `.md` body + `render-meta` block instead of a live extraction walk. Element identity is resolved at render time by name-match on the live instance + live bbox (anatomy/voice markers, structure/color overlays), backed by the node ids in `render-meta`. The motion skill is different on both counts: it never consumes a `.md` (no component walk) and its data comes from an After Effects export script (`motion/export-timeline.jsx`) that pre-computes segments, easing values, formatted labels, and `composition.durationMs`. Raw keyframes are stripped from the output — the JSON contains only segments. The agent passes segment data and `pxPerMs` to the Figma code, which computes bar positions at render time.
 
 The anatomy and property skills share a single template (`anatomyOverview`); anatomy clones and fills its sections first, then property re-uses the same detached frame to build its own chapters. The voice, color, API, structure, and motion skills each have their own template and render independently.
 
@@ -567,7 +568,7 @@ Each skill splits work across multiple Plugin API calls (`figma_execute` / `use_
 
 ## Component Markdown Pipeline
 
-The component markdown path produces a single standalone `.md` spec per component. It bypasses the Figma MCP for measurements — data comes from a locally-installed Figma Desktop plugin that runs inside the Figma plugin sandbox and writes a `_base.json` file to disk. Interpreter skills then read that file and render the `.md`.
+The component markdown path produces a single standalone `.md` spec per component. It bypasses the Figma MCP for measurements — data comes from the uSpec Extract Figma Desktop plugin that runs inside the Figma plugin sandbox and writes a `_base.json` file to disk. Interpreter skills then read that file and render the `.md`.
 
 ### Why this path exists
 
@@ -575,7 +576,7 @@ Each `create-*` Figma-native skill costs roughly 100k tokens per run because the
 
 ### Figma plugin (`figma-plugin/`)
 
-A local Figma Desktop plugin installed via **Plugins → Development → Import plugin from manifest…**. Not published to Figma Community — the source lives in-repo under `figma-plugin/` and is built with esbuild.
+A Figma Desktop plugin published on the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) (no local build required to use it). The source is open in-repo under `figma-plugin/` and is built with esbuild; it is not part of the npm package — the `npx uspec-skills` package delivers only the skills.
 
 The plugin walks the selected `COMPONENT` or `COMPONENT_SET` (a selected variant is auto-promoted to its component set) through a fixed sequence of phases and emits `{componentSlug}-_base.json`. Every variant is walked — no default-variant sampling — so cross-variant diffs are computed in the sandbox rather than reconstructed by the agent.
 

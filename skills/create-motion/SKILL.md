@@ -7,6 +7,15 @@ description: Generate motion specification annotations from After Effects timeli
 
 Generate a motion specification directly in Figma — timeline bars and detail tables documenting all animated properties from an After Effects composition.
 
+> **Out of scope of the Component Markdown (`.md`) consumer contract.** The other `create-*` skills require the component `.md` (produced by {{skill:create-component-md}}) and render from its `render-meta`. `create-motion` is the deliberate exception: its input is an After Effects timeline export (`{{ref:motion/export-timeline.jsx}}`), not a Figma component walk — there is no `_base.json`, no `extract-motion`, and no Motion section in the `.md`. This skill does NOT require a `.md` and does NOT participate in the require-`.md`/fail-fast/whitelisted-reads refactor.
+
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the motion spec into Figma from the After Effects timeline JSON.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input timeline JSON is a **READ-ONLY source of truth. Never edit it.** The only artifact this skill produces is the Figma annotation; render requests into Figma, never as a file edit.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) missing or invalid AE timeline JSON (the Step 4/5 gather + validate gate); (b) one-line abort if the Figma MCP connection is dead.
+
 ## MCP Adapter
 
 Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.

@@ -5,7 +5,14 @@ description: Generate color annotation specifications mapping UI elements to des
 
 # Create Color Annotation
 
-Generate a color annotation directly in Figma — tables mapping each visual element to its design token, organized by variant and state.
+Generate a color annotation directly in Figma — tables mapping each visual element to its design token, organized by variant (Strategy A) or by section with per-state columns (Strategy B). This skill **renders the Color section from the component `.md`**; it does NOT re-extract token bindings from Figma.
+
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the color annotation into Figma from the input `.md`.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input component `.md` is a **READ-ONLY source of truth. Never edit, append to, or "add a section" to it.** The only artifact this skill produces is the Figma annotation. When the user asks to "create/add a section," "show," or "include" something, render it **in the Figma annotation**, never as an edit to the `.md`.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) Step 0 fail-fast when no `.md` resolves; (b) one-line abort if the Figma MCP connection is dead.
 
 ## MCP Adapter
 
@@ -37,9 +44,10 @@ This walks up to the PAGE ancestor and loads its content. Console MCP does not n
 
 ## Inputs Expected
 
-- **Figma link**: URL to a component set or standalone component in Figma (preferred)
-- **Screenshot**: Image of the UI component (alternative if no Figma link)
-- **Description** (optional): Component name, specific variants to document
+- **Component `.md` spec** (**required**, user-provided path) — the source-of-truth component spec produced by {{skill:create-component-md}}. **The user tells you where this `.md` lives** — use the exact path they provide; the `.md` may live anywhere. This skill **renders the Color section from the `.md`**; it does NOT re-extract token bindings, variant axes, or mode collections from Figma. `fileKey`, `nodeId`, and `compSetNodeId` come from the `.md`'s `render-meta` block.
+- **Figma link** (optional) — placement hint only (where to drop the rendered frame on the canvas). Never the source of structural facts.
+
+There is no screenshot-only path and no live token-extraction path. Without the component `.md` there is nothing to render — see Step 0's fail-fast contract.
 
 ## Workflow
 
@@ -47,27 +55,59 @@ Copy this checklist and update as you progress:
 
 ```
 Task Progress:
-- [ ] Step 1: Read instruction file
-- [ ] Step 2: Verify MCP connection (if Figma link provided)
+- [ ] Step 0: Require + parse the component `.md` (Color body + render-meta). Detect Strategy A vs B. FAIL FAST if missing.
+- [ ] Step 1: Read instruction file (only as needed — NOT for re-extracting tokens)
+- [ ] Step 2: Verify MCP connection (rendering requires a live Figma session)
 - [ ] Step 3: Read template key from uspecs.config.json
-- [ ] Step 4: Gather context (MCP tools + user-provided input)
-- [ ] Step 4b: Run consolidated extraction script (tokens, axis classification, boolean enrichment, mode detection, sub-component tagging)
-- [ ] Step 4c: Interpret extraction data (strategy selection, variant plan, sub-component refs, element-to-token mappings)
-- [ ] Step 7: Organize analysis into structured data (component name, general notes, variants with tables and rows)
-- [ ] Step 8: Re-read instruction file (Common Mistakes, Do NOT sections) and audit
-- [ ] Step 9: Import and detach the Color Annotation template
-- [ ] Step 10: Fill header fields
-- [ ] Step 11: Render variants (Strategy A or B, one figma_execute per variant)
-- [ ] Step 12: Visual validation
+- [ ] Step 4: Build render inputs from the parsed .md (tables verbatim, COMP_SET_ID, BOOLEAN_UNHIDES) — NO extraction
+- [ ] Step 5: Re-derive per-section variantProps; for Strategy B, zip relabeled headers back to raw Figma state values
+- [ ] Step 6: (Strategy B mode-controlled only) ONE whitelisted getLocalVariableCollectionsAsync() read to resolve COLLECTION_ID / MODE_ID
+- [ ] Step 7: Audit the assembled render inputs against the .md
+- [ ] Step 8: Import and detach the Color Annotation template
+- [ ] Step 9: Fill header fields
+- [ ] Step 10: Render variants/sections (Strategy A or B, one figma_execute per variant/section)
+- [ ] Step 11: Visual validation
 ```
 
-### Step 1: Read Instructions
+### Step 0: Require and parse the component `.md` (fail fast)
 
-Read [agent-color-instruction.md]({{ref:color/agent-color-instruction.md}})
+**This skill is a consumer of the `.md` source of truth.** It does not re-extract from Figma and does not re-run the token-resolution / axis-classification / mode-detection layer — that work already happened in `extract-color`/`create-component-md` and is baked into the `.md`'s Color section. Your job is to render that section into a Figma frame.
+
+1. **Resolve the `.md` path.** Use the exact path the user gave, else an attached or open `.md` in context. The `.md` may live anywhere; do NOT invent or guess a path. If neither resolves to an existing file, abort per item 2. Never pause to ask the user which file to use.
+2. **Require the file.** If no file exists at the resolved `.md` path, **abort immediately** with this exact single-line diagnostic and stop — do NOT fall back to extraction:
+
+   > This skill requires the component's Markdown `.md` spec (produced by create-component-md). Provide the path to it. (create-component-md needs a _base.json from the uSpec Extract plugin.)
+
+3. **Parse the Color section** (`## Color`) from the `.md` body. **Detect the strategy by the table shape** of the first data table:
+   - **Strategy A (`ColorAnnotationData`)** when tables are shaped `Element | Token | Notes`. The body has one `###` sub-section per variant; each may carry one or more tables (a `####` heading per table when multiple).
+   - **Strategy B (`ConsolidatedColorAnnotationData`)** when tables are shaped `Element | {state1} | {state2} | … | Notes`. The body has one `###` sub-section per section; each may carry one or more tables.
+
+   For each table, capture:
+   - The general-notes blockquote (`> …`) at the top of the Color body, if present → `GENERAL_NOTES`.
+   - The variant name (Strategy A) or section name (Strategy B) from the `###` heading; the per-table name from the `####` heading (or the variant/section name when only one table).
+   - **Token cells VERBATIM.** Each token cell is already formatted by the producer as `tokenName (#RRGGBB)`, a bare `#RRGGBB`, or `none`. **Pass these strings to the render script unchanged — do not reformat, do not strip the hex, do not re-resolve the token.**
+   - **Composite children.** A row whose `Element` cell is prefixed with `└ ` or `├ ` is a composite-style child row of the row immediately above it. Collect these into a `compositeChildren` array on the parent element (`{ element, value, notes }`); the child's token/value cell is passed verbatim too.
+4. **Parse the `render-meta` block** (the fenced JSON between `<!-- render-meta:start v=1 -->` and `<!-- render-meta:end -->`):
+   - `COMP_SET_ID` = `render-meta.component.compSetNodeId` — for creating live preview instances.
+   - `BOOLEAN_UNHIDES` — the unhide set is **ALL `render-meta.booleanDefs[]` keys**. Reshape to `[{ booleanRawKey: <key> }]`. Each `key` is the raw component-property key `setProperties` expects (it matches a `render-meta.propertyDefs` raw key). The elements these toggles reveal are already documented in the `.md` tables (create-component-md merged the boolean delta); the unhide set only exists so the preview instance shows them.
+   - `variantAxes` / `variantAxesDefaults` — for Step 5 section→variant mapping.
+   - `fileKey`, `nodeId` — for the Step 11 completion link and template placement.
+   - `sourceHash` — recorded in the completion footer so drift between this `.md` and its `_base.json` is detectable.
+5. **(Strategy B only) Parse the `stateAxisMapping`.** The Color body's per-state column headers may be **runtime-condition relabeled** by create-component-md — the visible headers can be engineer-facing conditions (`focused`, `has value && not focused`, `validationState='error'`) instead of the raw Figma state-axis options. The render script needs the **raw Figma state values** to drive `setProperties` and mode previews. Read the API `stateAxisMapping` carried in the `.md` (the `{ figmaValue, runtimeCondition }` pairs the API section surfaces). You will zip the relabeled headers back to raw Figma values in Step 5.
+6. **(Strategy B mode-controlled only) Note the mode collection NAMES from the `.md`.** If the Color is mode-controlled, the **Cross-section invariants** block carries the bullet `- Color is mode-controlled by "{collectionName}" with modes: {modes}`, and/or the section titles encode the mode (e.g., `Primary / Gray`). Record `collectionName`, the mode names, and which mode each Strategy B section maps to. The IDs behind these names are resolved by the single whitelisted read in Step 6.
+
+**FORBIDDEN — do NOT re-extract.** When the component `.md` is present (it always is past Step 0), you MUST NOT run the legacy extraction/tree-walk. Specifically:
+- Do NOT run any `figma_execute` / `use_figma` script that walks the component tree to rebuild color bindings, classify variant axes, enrich booleans, or detect mode collections. **The old Step 4 / Step 4b "Consolidated Extraction Script" (the `extractColorBindings` / `walkTree` / `axisClassification` / `booleanDelta` / `modeDetection` walk) is DELETED — it does not exist in this skill anymore.** The container re-run (re-targeting the extraction at a sub-component's node ID) is **also DELETED** — container detection and per-child specs are handled by `create-component-md`'s Follow-ups, not here.
+- Do NOT re-derive tokens, hex values, strategy selection, axis classification, or mode token maps — they are authored in the `.md` and copied verbatim.
+- **The ONE whitelisted live read** (the ONLY Figma read beyond template import and rendering) is in Step 6: `figma.variables.getLocalVariableCollectionsAsync()` — and ONLY to resolve `COLLECTION_ID` / `MODE_ID` for Strategy B mode previews by matching the collection/mode **names** surfaced in the `.md`. This read fetches **variable collections only** — it performs **NO component-tree walk, NO color extraction, NO token-binding resolution**. It runs only when the parsed Color is Strategy B *and* mode-controlled; skip it otherwise. Any other live read is forbidden.
+
+### Step 1: Read Instructions (only as needed)
+
+The tokens, hex values, strategy, and per-state columns are already authored in the `.md` — you do NOT re-derive them. Read [agent-color-instruction.md]({{ref:color/agent-color-instruction.md}}) **only** if you need to reason about how a parsed table should map to template structure (e.g., composite-child hierarchy indicators, Strategy A vs B layout). Skip it for straightforward annotations.
 
 ### Step 2: Verify MCP Connection
 
-If a Figma link is provided, read `mcpProvider` from `uspecs.config.json` and verify the connection:
+Read `mcpProvider` from `uspecs.config.json` and verify the connection (rendering requires a live Figma session):
 
 **If `figma-console`:**
 - `figma_get_status` — Confirm Desktop Bridge plugin is active
@@ -86,520 +126,64 @@ Read the file `uspecs.config.json` and extract:
 If the template key is empty, tell the user:
 > The color annotation template key is not configured. Run {{skill:firstrun}} with your Figma template library link first.
 
-### Step 4: Gather Context
+### Step 4: Build render inputs from the parsed `.md` (no extraction)
 
-Use ALL available sources to maximize context:
+Everything the render scripts need is already in the `.md` you parsed in Step 0. Assemble the render inputs directly — there is **no extraction call** here (see the FORBIDDEN directive in Step 0).
 
-**From user:**
-- Any screenshots or images provided
-- Component description and context
-- Specific variants or states to document
+Build these values:
 
-**From MCP tools (when Figma link provided):**
-1. `figma_navigate` — Open the component URL
-2. `figma_take_screenshot` — Capture the component layout and states
-3. `figma_get_file_data` — Get detailed structure with fill/stroke information
-4. `figma_get_component` — Get component data including visual properties
-5. `figma_get_variables` — Get variable collections and token definitions
-6. `figma_get_token_values` — Get all variable values organized by collection and mode
-7. `figma_get_styles` — Get color styles if component uses styles instead of variables
-8. `figma_search_components` — Find component by name if needed
+- **`COMPONENT_NAME`** — `render-meta.component.componentName` (or the `.md`'s top-level `# {name}` heading).
+- **`GENERAL_NOTES`** / **`HAS_GENERAL_NOTES`** — the Color body's general-notes blockquote, verbatim (and whether one exists).
+- **`COMPONENT_SET_ID`** — `render-meta.component.compSetNodeId`.
+- **`BOOLEAN_UNHIDES`** — `render-meta.booleanDefs[]` keys reshaped to `[{ booleanRawKey }]` (the full set; see Step 0.4). Use `[]` only when `booleanDefs` is empty.
+- **`TABLES` (Strategy A)** — one entry per parsed variant table: `{ name, elements: [{ element, token, notes, compositeChildren? }] }`. The `token` field is the token cell **verbatim** from the `.md` (`tokenName (#RRGGBB)` / bare hex / `none`). `compositeChildren[]` are the `└`/`├` child rows with `{ element, value, notes }` (`value` verbatim).
+- **`TABLES` (Strategy B)** — one entry per parsed section table: `{ name, elements: [{ element, tokensByState, notes, compositeChildren? }] }`. `tokensByState` maps the **raw Figma state value** (re-derived in Step 5) → token cell verbatim. `compositeChildren[]` carry a single `value` repeated across states (verbatim), matching the `.md`.
 
-### Step 4b: Run Consolidated Extraction Script
+Every emitted row is sourced from the `.md` and tagged provenance **`md`**. The only non-`md` data is the live `bbox`/mode-id resolution the render path performs itself (tagged `measured`); nothing is `inferred` unless a parsed cell is missing and you must note a drift fill.
 
-When a Figma link is provided, run this extraction script via `figma_execute` to programmatically walk the component tree and resolve all color variable bindings, classify variant axes, detect boolean-gated elements, and discover mode-controlled color collections — all in a single call.
+> The legacy "gather context + run the consolidated extraction script" flow has been **removed**. Do not reintroduce it. The `.md` + `render-meta` are the complete input.
 
-Set `__SKIP_AXES_JSON__` to `{}` for the initial run — the script will walk all variants. After interpreting the results in Step 4c, you may optionally re-run this script with color-irrelevant axes populated to get a reduced dataset (see Step 4c-ii).
+### Step 5: Re-derive variant props (and, for Strategy B, the raw state values)
 
-Replace `__NODE_ID__` with the component set node ID extracted from the URL (`node-id=123-456` → `123:456`). Replace `__SKIP_AXES_JSON__` with `{}` (or a JSON object mapping color-irrelevant axis names to their default/representative value if re-running after Step 4c, e.g., `{"Size": "Medium", "Density": "Default"}`):
+`VARIANT_PROPS` (and Strategy B's `STATE_COLUMNS` / `STATE_AXIS_NAME`) are the only values not copied verbatim from the `.md` — they are cheaply re-derived from `render-meta`, with no Figma reads.
+
+- **Per-variant / per-section `VARIANT_PROPS`.** Match the variant name (Strategy A) or section name (Strategy B) to `render-meta.variantAxes` (case-insensitive option match). When a name component matches an option on an axis, set that axis to the matching value; leave the other axes at `render-meta.variantAxesDefaults`. When there is no match (behavioral/section grouping that is not a Figma variant), use `variantAxesDefaults` verbatim. The render script's scored variant matching is the safety net — `VARIANT_PROPS` is the primary lever.
+- **Strategy B — zip relabeled headers back to raw Figma state values.** The render script uses `STATE_COLUMNS` to both (a) match the state variant child via `setProperties`/scoring and (b) label the columns; it therefore needs the **raw Figma state-axis options**. For each Color state column header in order, find the `stateAxisMapping[]` entry whose `runtimeCondition` equals that header and take its `figmaValue`. Build:
+  - `STATE_AXIS_NAME` = the Figma state-axis name (the axis in `render-meta.variantAxes` whose options are the `stateAxisMapping[].figmaValue` set).
+  - `STATE_COLUMNS` = the ordered list of `figmaValue`s, one per Color state column.
+  - and key each element's `tokensByState` by those `figmaValue`s (positionally — the `.md`'s token cells are indexed by the original Figma state values; only the headers were relabeled).
+  - **Abort the section with a diagnostic** if `stateAxisMapping` cannot zip 1:1 to the Color state columns (a header has no matching `runtimeCondition`, or the counts differ) — surface `Color section "{name}": stateAxisMapping does not zip 1:1 to the {N} state columns; cannot recover raw Figma state values.` and skip that section rather than rendering the wrong states. When the headers are NOT relabeled (no `stateAxisMapping`, or it does not cover the columns), the headers are already raw Figma values — use them verbatim as `STATE_COLUMNS`.
+
+### Step 6: Resolve mode IDs (Strategy B, mode-controlled only — the single whitelisted read)
+
+Run this **only** when the parsed Color is Strategy B *and* mode-controlled (Step 0.6 found a mode collection). This is the ONE live Figma read this skill performs beyond template import and rendering. It fetches variable collections **only** — no tree walk, no color extraction:
 
 ```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
-const SKIP_AXES = __SKIP_AXES_JSON__;
-
-function rgbToHex(c) {
-  return '#' + [c.r, c.g, c.b].map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
-}
-
-const collectionIdSet = new Set();
-
-async function resolveVariableToken(binding) {
-  if (!binding?.id) return null;
-  try {
-    const v = await figma.variables.getVariableByIdAsync(binding.id);
-    if (v) {
-      collectionIdSet.add(v.variableCollectionId);
-      return v.codeSyntax?.WEB || v.name;
-    }
-  } catch {}
-  return null;
-}
-
-async function buildCompositeDetail(fills, styleName, resolveVarFn) {
-  const visibleFills = fills.filter(f => f.visible !== false);
-  if (visibleFills.length < 2) return null;
-  const layers = [];
-  for (let i = visibleFills.length - 1; i >= 0; i--) {
-    const f = visibleFills[i];
-    const layer = { type: f.type === 'SOLID' ? 'solid' : 'gradient', blendMode: f.blendMode || 'NORMAL', opacity: f.opacity };
-    if (f.type === 'SOLID') {
-      layer.hex = rgbToHex(f.color);
-      layer.token = f.boundVariables?.color ? await resolveVarFn(f.boundVariables.color) : null;
-    } else if (f.type.startsWith('GRADIENT_')) {
-      layer.gradientType = f.type;
-      if (f.gradientTransform) {
-        layer.angleDegrees = Math.round(Math.atan2(f.gradientTransform[0][1], f.gradientTransform[0][0]) * (180 / Math.PI));
-      }
-      layer.stops = [];
-      if (f.gradientStops) {
-        for (const stop of f.gradientStops) {
-          const s = { position: Math.round(stop.position * 1000) / 1000, color: 'rgba(' + Math.round(stop.color.r * 255) + ', ' + Math.round(stop.color.g * 255) + ', ' + Math.round(stop.color.b * 255) + ', ' + (Math.round(stop.color.a * 1000) / 1000) + ')' };
-          s.token = stop.boundVariables?.color ? await resolveVarFn(stop.boundVariables.color) : null;
-          layer.stops.push(s);
-        }
-      }
-    } else if (f.type === 'IMAGE') {
-      layer.type = 'image';
-    }
-    layers.push(layer);
-  }
-  return { styleName, layers };
-}
-
-async function extractColorBindings(node, path) {
-  const entries = [];
-  const elementName = path || node.name;
-
-  if (node.fills && Array.isArray(node.fills)) {
-    let fillStyleName = null;
-    if (node.fillStyleId && node.fillStyleId !== '' && typeof node.fillStyleId === 'string') {
-      try { const style = await figma.getStyleByIdAsync(node.fillStyleId); if (style) fillStyleName = style.name; } catch {}
-    }
-    let fillEntryAdded = false;
-    for (const fill of node.fills) {
-      if (fill.visible === false) continue;
-      if (fill.type === 'SOLID') {
-        const hex = rgbToHex(fill.color);
-        let token = fillStyleName || null;
-        if (!token && fill.boundVariables?.color) {
-          token = await resolveVariableToken(fill.boundVariables.color);
-        }
-        const prop = node.type === 'TEXT' ? 'text fill' : 'fill';
-        const entry = { element: elementName, property: prop, hex, token, opacity: fill.opacity };
-        if (fillStyleName && !fillEntryAdded) {
-          const composite = await buildCompositeDetail(node.fills, fillStyleName, resolveVariableToken);
-          if (composite) entry.compositeDetail = composite;
-          fillEntryAdded = true;
-        }
-        entries.push(entry);
-      }
-    }
-    if (fillStyleName && !fillEntryAdded) {
-      const visibleFills = node.fills.filter(f => f.visible !== false);
-      if (visibleFills.length > 0) {
-        const hex = visibleFills[0].type === 'SOLID' ? rgbToHex(visibleFills[0].color) : '';
-        const entry = { element: elementName, property: node.type === 'TEXT' ? 'text fill' : 'fill', hex, token: fillStyleName, opacity: 1 };
-        const composite = await buildCompositeDetail(node.fills, fillStyleName, resolveVariableToken);
-        if (composite) entry.compositeDetail = composite;
-        entries.push(entry);
-        fillEntryAdded = true;
-      }
-    }
-  }
-
-  if (node.strokes && Array.isArray(node.strokes)) {
-    let strokeStyleName = null;
-    if (node.strokeStyleId && node.strokeStyleId !== '' && typeof node.strokeStyleId === 'string') {
-      try { const style = await figma.getStyleByIdAsync(node.strokeStyleId); if (style) strokeStyleName = style.name; } catch {}
-    }
-    let strokeEntryAdded = false;
-    for (const stroke of node.strokes) {
-      if (stroke.visible === false) continue;
-      if (stroke.type === 'SOLID') {
-        const hex = rgbToHex(stroke.color);
-        let token = strokeStyleName || null;
-        if (!token && stroke.boundVariables?.color) {
-          token = await resolveVariableToken(stroke.boundVariables.color);
-        }
-        const entry = { element: elementName, property: 'stroke', hex, token, opacity: stroke.opacity };
-        if (strokeStyleName && !strokeEntryAdded) {
-          const composite = await buildCompositeDetail(node.strokes, strokeStyleName, resolveVariableToken);
-          if (composite) entry.compositeDetail = composite;
-          strokeEntryAdded = true;
-        }
-        entries.push(entry);
-      }
-    }
-  }
-
-  if (node.effects && Array.isArray(node.effects)) {
-    let effectStyleName = null;
-    if (node.effectStyleId && node.effectStyleId !== '' && typeof node.effectStyleId === 'string') {
-      try { const style = await figma.getStyleByIdAsync(node.effectStyleId); if (style) effectStyleName = style.name; } catch {}
-    }
-    if (effectStyleName) {
-      entries.push({ element: elementName, property: 'effect style', hex: '', token: effectStyleName, opacity: 1 });
-    } else {
-      for (const effect of node.effects) {
-        if (effect.visible === false) continue;
-        if (effect.color) {
-          const hex = rgbToHex(effect.color);
-          let token = effect.boundVariables?.color
-            ? await resolveVariableToken(effect.boundVariables.color)
-            : null;
-          const effectType = effect.type === 'DROP_SHADOW' ? 'drop shadow'
-            : effect.type === 'INNER_SHADOW' ? 'inner shadow'
-            : effect.type;
-          entries.push({ element: elementName, property: effectType, hex, token, opacity: effect.color.a });
-        }
-      }
-    }
-  }
-
-  return entries;
-}
-
-async function walkTree(node, parentPath) {
-  const currentPath = parentPath ? parentPath + ' > ' + node.name : node.name;
-  let entries = await extractColorBindings(node, node.name);
-
-  if (node.type === 'INSTANCE') {
-    let compSetName = null;
-    try {
-      const mainComp = await node.getMainComponentAsync();
-      if (mainComp && mainComp.parent && mainComp.parent.type === 'COMPONENT_SET') {
-        compSetName = mainComp.parent.name;
-      }
-    } catch {}
-    if (compSetName) {
-      entries = entries.map(e => ({ ...e, subComponentName: compSetName }));
-    }
-    for (const child of node.children) {
-      const childEntries = await walkTree(child, currentPath);
-      if (compSetName) {
-        childEntries.forEach(e => { if (!e.subComponentName) e.subComponentName = compSetName; });
-      }
-      entries = entries.concat(childEntries);
-    }
-  } else if ('children' in node) {
-    for (const child of node.children) {
-      entries = entries.concat(await walkTree(child, currentPath));
-    }
-  }
-
-  return entries;
-}
-
-const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
-  figma.closePlugin(JSON.stringify({ error: 'Node is not a component set or component. Type: ' + (node ? node.type : 'null') }));
-  return;
-}
-
-// Ensure the correct page context is loaded for stable child traversal
-let _p = node; while (_p.parent && _p.parent.type !== 'PAGE') _p = _p.parent;
-if (_p.parent && _p.parent.type === 'PAGE') await figma.setCurrentPageAsync(_p.parent);
-
-const isComponentSet = node.type === 'COMPONENT_SET';
-
-const propDefs = node.componentPropertyDefinitions;
-const propertyDefs = {};
-if (propDefs) {
-  for (const [key, def] of Object.entries(propDefs)) {
-    propertyDefs[key] = { type: def.type, defaultValue: def.defaultValue };
-    if (def.variantOptions) propertyDefs[key].variantOptions = def.variantOptions;
-  }
-}
-
-const variantAxes = {};
-if (isComponentSet && node.variantGroupProperties) {
-  for (const [key, val] of Object.entries(node.variantGroupProperties)) {
-    variantAxes[key] = val.values;
-  }
-}
-
-const variantChildren = isComponentSet ? node.children : [node];
-const skipAxes = SKIP_AXES || {};
-const filteredVariants = variantChildren.filter(variant => {
-  const props = variant.variantProperties || {};
-  for (const [axis, defaultVal] of Object.entries(skipAxes)) {
-    if (props[axis] && props[axis] !== defaultVal) return false;
-  }
-  return true;
-});
-
-// Phase 1: Walk all variants — color bindings + axis fingerprints + sub-component tagging
-// Both `hover` and `hovered` are recognized: `hover` is the historical name in
-// most existing Figma libraries; `hovered` is the canonical name going forward.
-const stateKeywords = ['enabled', 'hover', 'hovered', 'pressed', 'disabled', 'active', 'rest', 'focused', 'selected', 'dragged', 'error', 'loading'];
-const axisTokenSets = {};
-
-const variantColorData = [];
-for (const variant of filteredVariants) {
-  const colorEntries = await walkTree(variant, null);
-  const tokenFingerprint = colorEntries
-    .filter(e => e.token)
-    .map(e => e.token)
-    .sort()
-    .join('|');
-
-  const vProps = variant.variantProperties || {};
-  for (const [axis, val] of Object.entries(vProps)) {
-    if (!axisTokenSets[axis]) axisTokenSets[axis] = {};
-    if (!axisTokenSets[axis][val]) axisTokenSets[axis][val] = tokenFingerprint;
-  }
-
-  variantColorData.push({
-    name: variant.name,
-    variantProperties: vProps,
-    colorEntries
-  });
-}
-
-// Phase 2: Axis classification
-const axisClassification = {};
-for (const [axis, values] of Object.entries(variantAxes)) {
-  const tokenSets = axisTokenSets[axis] || {};
-  const uniqueSets = new Set(Object.values(tokenSets));
-  const isState = values.some(v => stateKeywords.includes(v.toLowerCase()));
-  axisClassification[axis] = {
-    values,
-    isState,
-    colorRelevant: uniqueSets.size > 1,
-    tokenSetsByValue: tokenSets
-  };
-}
-
-// Phase 3: Boolean enrichment
-let booleanDelta = { booleanPropsToggled: [], deltaCount: 0, delta: [] };
-const boolProps = {};
-for (const [key, def] of Object.entries(propertyDefs)) {
-  if (def.type === 'BOOLEAN') boolProps[key] = true;
-}
-
-if (Object.keys(boolProps).length > 0) {
-  const defaultVariant = isComponentSet
-    ? (node.defaultVariant || node.children[0])
-    : node;
-  const baselineKeys = new Set();
-  const baselineEntries = await walkTree(defaultVariant, null);
-  for (const e of baselineEntries) {
-    baselineKeys.add(e.element + '|' + e.property + '|' + (e.token || e.hex));
-  }
-
-  async function loadAllFonts(rootNode) {
-    const textNodes = [];
-    function collect(node) {
-      try {
-        if (node.type === 'TEXT') textNodes.push(node);
-        if ('children' in node && node.children) {
-          for (const c of node.children) { try { collect(c); } catch {} }
-        }
-      } catch {}
-    }
-    collect(rootNode);
-    const fontSet = new Set();
-    const fontsToLoad = [];
-    for (const tn of textNodes) {
-      try {
-        const fn = tn.fontName;
-        if (fn && fn !== figma.mixed && fn.family) {
-          const key = fn.family + '|' + fn.style;
-          if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-        }
-      } catch {}
-    }
-    await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
-  }
-
-  const instance = defaultVariant.createInstance();
-  instance.x = defaultVariant.x + defaultVariant.width + 100;
-  instance.y = defaultVariant.y;
-  instance.setProperties(boolProps);
-  await loadAllFonts(instance);
-
-  function enableNestedBooleans(node) {
-    try {
-      if (node.type === 'INSTANCE') {
-        const childProps = node.componentProperties;
-        if (childProps) {
-          const childBoolProps = {};
-          for (const [key, val] of Object.entries(childProps)) {
-            if (val.type === 'BOOLEAN') childBoolProps[key] = true;
-          }
-          if (Object.keys(childBoolProps).length > 0) {
-            try { node.setProperties(childBoolProps); } catch {}
-          }
-        }
-      }
-      if ('children' in node && node.children) {
-        for (const child of node.children) { try { enableNestedBooleans(child); } catch {} }
-      }
-    } catch {}
-  }
-
-  function directUnhide(node) {
-    try { if (!node.visible) node.visible = true; } catch {}
-    if ('children' in node && node.children) {
-      for (const child of node.children) { try { directUnhide(child); } catch {} }
-    }
-  }
-
-  enableNestedBooleans(instance);
-  directUnhide(instance);
-  await loadAllFonts(instance);
-
-  const enrichedEntries = await walkTree(instance, null);
-  const delta = [];
-  for (const e of enrichedEntries) {
-    const key = e.element + '|' + e.property + '|' + (e.token || e.hex);
-    if (!baselineKeys.has(key)) delta.push(e);
-  }
-  instance.remove();
-
-  booleanDelta = {
-    booleanPropsToggled: Object.keys(boolProps),
-    deltaCount: delta.length,
-    delta
-  };
-}
-
-// Phase 4: Mode detection
-let modeDetection = { hasModeCollection: false, collectionName: null, modes: [], modeTokenMap: {} };
-if (collectionIdSet.size > 0) {
-  const allCollections = await figma.variables.getLocalVariableCollectionsAsync();
-  for (const colId of collectionIdSet) {
-    const col = allCollections.find(c => c.id === colId);
-    if (!col || col.modes.length <= 1) continue;
-
-    const modeTokenMap = {};
-    for (const mode of col.modes) {
-      modeTokenMap[mode.name] = {};
-      for (const varId of col.variableIds) {
-        const variable = await figma.variables.getVariableByIdAsync(varId);
-        if (!variable) continue;
-        const modeValue = variable.valuesByMode[mode.modeId];
-        if (modeValue && modeValue.type === 'VARIABLE_ALIAS') {
-          const aliased = await figma.variables.getVariableByIdAsync(modeValue.id);
-          if (aliased) {
-            modeTokenMap[mode.name][variable.codeSyntax?.WEB || variable.name] = aliased.codeSyntax?.WEB || aliased.name;
-          }
-        } else {
-          modeTokenMap[mode.name][variable.codeSyntax?.WEB || variable.name] = variable.codeSyntax?.WEB || variable.name;
-        }
-      }
-    }
-
-    modeDetection = {
-      hasModeCollection: true,
-      collectionName: col.name,
-      collectionId: col.id,
-      modes: col.modes.map(m => m.name),
-      modeIds: Object.fromEntries(col.modes.map(m => [m.name, m.modeId])),
-      modeTokenMap
-    };
-    break;
-  }
-}
-
-figma.closePlugin(JSON.stringify({
-  componentName: node.name,
-  compSetNodeId: TARGET_NODE_ID,
-  isComponentSet,
-  variantAxes,
-  propertyDefs,
-  variantCount: variantChildren.length,
-  sampledCount: filteredVariants.length,
-  skippedAxes: Object.keys(skipAxes),
-  variantColorData,
-  axisClassification,
-  booleanDelta,
-  modeDetection
-}));
+return (await figma.variables.getLocalVariableCollectionsAsync())
+  .map(c => ({ id: c.id, name: c.name, modes: c.modes.map(m => ({ name: m.name, modeId: m.modeId })) }));
 ```
 
-Save the returned JSON. This consolidated extraction provides:
-- `compSetNodeId` — needed for creating live preview instances in Step 11
-- `variantAxes` — variant axis names and their options, for mapping variant sections to Figma property keys
-- `propertyDefs` — exact Figma property keys (including `#nodeId` suffixes) for `setProperties()` when placing preview instances
-- `variantCount` / `sampledCount` / `skippedAxes` — extraction scope metadata
-- `variantColorData` — per-variant array of `colorEntries`, each with `element`, `property` (fill, text fill, stroke, drop shadow, inner shadow, or effect style), `hex`, `token`, `opacity`, and optional `subComponentName` (string) identifying which nested component the entry belongs to (e.g., `"Button"`). Always show the actual token; use `subComponentName` for richer notes. When `property` is `"effect style"`, the entry represents a composed effect style (e.g., a shadow style) — the `token` is the style name and individual shadow layers are not emitted. **Token resolution priority:** paint/stroke style names (`fillStyleId`, `strokeStyleId`) take precedence over variable bindings (`boundVariables.color`). A composite style (e.g., `composite/button-primary/background`) wrapping a semantic variable is common — the style name is the correct token. **Composite styles:** When a fill/stroke style has 2+ visible paint layers, the entry includes a `compositeDetail` object with `styleName` and `layers[]` (ordered top-to-bottom). Each layer has `type` (`solid`, `gradient`, or `image`), `blendMode`, `opacity`, and type-specific fields: `hex`/`token` for solids; `gradientType`, `angleDegrees`, `stops[]` (each with `position`, `color` as rgba string, `token`) for gradients
-- `axisClassification` — per-axis classification with `isState`, `colorRelevant`, and `tokenSetsByValue`
-- `booleanDelta` — elements discovered behind boolean toggles (`deltaCount`, `delta` entries, `booleanPropsToggled`)
-- `modeDetection` — mode-controlled collection info (`hasModeCollection`, `collectionName`, `collectionId`, `modes`, `modeIds`, `modeTokenMap`)
+From the result:
+- `COLLECTION_ID` = the `id` of the collection whose `name` equals the `collectionName` recorded in Step 0.6.
+- `MODE_ID` (per Strategy B section) = the `modeId` of the mode whose `name` matches the mode the section maps to (from the `.md` section title / mode list).
 
-Use this data in Step 4c to interpret and plan the rendering strategy. Entries with `subComponentName` come from nested instances — always include their actual tokens and use the sub-component name for descriptive notes and element names.
+Set `COLLECTION_ID = ''` and `MODE_ID = ''` for any section that is not mode-controlled. Do not extend this script to read anything beyond collections/modes.
 
-### Step 4c: Interpret Extraction Data
+### Step 7: Audit the assembled render inputs
 
-Using the consolidated extraction output from Step 4b, perform the following interpretation steps (no additional `figma_execute` calls needed — all data is already in the extraction payload):
+Before rendering, verify the inputs you built from the `.md`:
+- The strategy (A vs B) matches the parsed table shape.
+- Every token cell is the **verbatim** `.md` string (`tokenName (#RRGGBB)` / bare hex / `none`) — not re-resolved, not reformatted.
+- Composite child rows (`└`/`├`) were collected into `compositeChildren[]` with their `value` verbatim.
+- `COMPONENT_SET_ID` and `BOOLEAN_UNHIDES` come from `render-meta` — not from any live read.
+- **Strategy B:** every section's `STATE_COLUMNS` are raw Figma state values (zipped from `stateAxisMapping`, or already-raw headers), and any section that failed the 1:1 zip was aborted with the diagnostic — not rendered with guessed states.
+- You did NOT run an extraction/tree-walk, and you ran `getLocalVariableCollectionsAsync()` at most once (Strategy B mode-controlled only). See Step 0 FORBIDDEN.
 
-1. **Validate extraction**: Confirm `variantColorData` is non-empty and `sampledCount > 0`. If the component is a standalone `COMPONENT` (not a set), expect a single variant entry.
-1b. **Container detection**: Check if the parent component has any direct color entries (entries WITHOUT `subComponentName`). If ALL entries across all variants have `subComponentName` and the parent contributes no direct color entries, this is a container/slot component. In this case:
-   - Find the sub-component's component set node ID (search the file for the `subComponentName` value as a COMPONENT_SET)
-   - Re-run the Step 4b extraction script targeting the sub-component's node ID
-   - Use the sub-component's axes and variant structure for the rest of the workflow
-   - Keep the parent component name as the annotation title
-   - Note the container relationship in `generalNotes`
-2. **Merge boolean delta**: If `booleanDelta.deltaCount > 0`, merge the `booleanDelta.delta` entries into the default variant's color entries. These represent elements hidden behind boolean toggles.
-3. **Annotate sub-component entries**: Entries with `subComponentName` come from nested instances. Include their actual tokens — use the sub-component name to write descriptive notes (e.g., `"Button container fill"`). Group sub-component entries together in the table when it aids readability.
-4. **Map elements to tokens**: Using the `variantColorData` entries, build element-to-token mappings. Entries with a non-null `token` field have a resolved variable binding; entries with `token: null` use a hard-coded color (note this in output).
-4a. **Build composite breakdowns**: For each entry that has a `compositeDetail` (multi-layer paint style), construct a `compositeChildren` array on the corresponding `ColorElement`/`ConsolidatedElement`. Iterate layers in the already top-to-bottom order:
-   - **Solid layers**: element = `"Solid fill"`, value = variable token or hex, notes = `"{blendMode} blend, {opacity}% opacity"`. Add `"Top layer."` or `"Bottom layer."` prefix when 2+ layers exist.
-   - **Gradient layers**: element = `"{gradientType} gradient"` (e.g., `"Linear gradient"`), value = `"linear-gradient({angle}deg, ...)"`, notes = `"{blendMode} blend, {opacity}% opacity"` with layer position prefix. Then append one child per stop: element = `"Stop at {position}%"`, value = `"rgba(r, g, b, a)"` or token if bound, notes = position description (e.g., `"Transparent"`, `"Opaque"`).
-   - **Image layers**: element = `"Image fill"`, value = `"image"`, notes = blend mode and opacity.
-5. **Capture Figma property keys**: Use `propertyDefs` and `variantAxes` from the extraction to map variant section names to correct Figma property values for `setProperties()`.
-6. **Choose rendering strategy**: See Step 4c-i below.
-7. **Build variant plan**: See Step 4c-ii below.
+Fix any mismatch by re-parsing the `.md` — never by re-extracting from Figma.
 
-#### Step 4c-i: Determine Rendering Strategy
+### Step 8: Import and Detach Template
 
-Using `axisClassification` and `modeDetection` from the extraction output, choose a rendering strategy by following the **Rendering Strategies** and **Decision Logic (Two-Gate Model)** sections in the instruction file.
-
-**Template note:** Strategy A renames the template's `#state-title` column header from "State" to "Token" at render time.
-
-If Strategy B, also record:
-- `stateAxisName`: name of the state axis (e.g., "State")
-- `stateValues`: ordered list of state values (columns)
-- `nonStateAxes`: the remaining color-relevant axes whose combinations form sections
-
-#### Step 4c-ii: Build Variant Reduction Plan
-
-Based on the strategy chosen in Step 4c-i, determine which sections to render. Follow the **Variable Mode Colors** section in the instruction file for mode-controlled components and the **Color-Irrelevant Axes** section for axis filtering.
-
-- **Color-irrelevant axes**: Pick one representative value (typically the default). Never create sections for these axes.
-- **Strategy A sections**: List each color-relevant axis combination as a section.
-- **Strategy B sections**: List each non-state color-relevant combination as a section, with all state values as columns within each section.
-
-**Mode-controlled components:** If `modeDetection.hasModeCollection` is true:
-- Record the `collectionId` from `modeDetection` on the top-level data structure.
-- Record the `modeId` for each section so the rendering step can apply the correct variable mode to preview instances.
-- Use `modeDetection.modeTokenMap[modeName]` to resolve generic tokens to semantic aliases per mode.
-
-**Optional re-extraction:** If the component is complex (many variants) and Step 4b was run with `SKIP_AXES = {}`, re-run Step 4b now with `__SKIP_AXES_JSON__` populated with the color-irrelevant axes identified above (e.g., `{"Size": "Medium", "Density": "Default"}`) to get a focused dataset. For components with few variants (≤ 10), there is no need to re-run.
-
-Use the extraction output fields directly — `compSetNodeId` for creating live preview instances in Step 11, `variantAxes` for mapping sections to Figma property keys, `propertyDefs` for exact Figma property keys (including `#nodeId` suffixes).
-
-### Step 7: Organize Analysis into Structured Data
-
-Follow the **Data Structure Reference** in the instruction file — use the Strategy A (`ColorAnnotationData`) or Strategy B (`ConsolidatedColorAnnotationData`) interfaces. Build an internal working model that feeds directly into the Figma rendering steps — no JSON output artifact is needed.
-
-Rendering-critical fields consumed by Step 11 scripts:
-- `variantProperties` — maps Figma property keys to values for `setProperties()` on preview instances
-- `collectionId` / `modeId` (Strategy B only) — passed to rendering scripts for `setExplicitVariableModeForCollection`
-
-### Step 8: Audit
-
-Re-read the instruction file, focusing on:
-- **Common Mistakes** section
-- **Do NOT** section
-- **Writing Notes** guidelines (3-8 words per note)
-
-Check your output against each rule. Fix any violations.
-
-### Step 9: Import and Detach Template
-
-Run via `figma_execute` (replace `__COLOR_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL):
+Run via `figma_execute` (replace `__COLOR_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with `COMPONENT_SET_ID` = `render-meta.component.compSetNodeId`):
 
 ```javascript
 const TEMPLATE_KEY = '__COLOR_TEMPLATE_KEY__';
@@ -626,7 +210,7 @@ return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
 
 Save the returned `frameId` — you need it for all subsequent steps.
 
-### Step 10: Fill Header Fields
+### Step 9: Fill Header Fields
 
 Run via `figma_execute` (replace `__FRAME_ID__`, `__COMPONENT_NAME__`, and `__GENERAL_NOTES__`):
 
@@ -666,20 +250,20 @@ if (notesFrame) {
 return { success: true };
 ```
 
-Replace `__HAS_GENERAL_NOTES__` with `true` or `false`.
+Replace `__HAS_GENERAL_NOTES__` with `true` or `false` (from `HAS_GENERAL_NOTES`).
 
-### Step 11: Render Variants
+### Step 10: Render Variants
 
-Use the rendering strategy determined in Step 4c-i. Run **one `figma_execute` call per variant** to avoid timeouts.
+Use the rendering strategy detected in Step 0. Run **one `figma_execute` call per variant (Strategy A) or per section (Strategy B)** to avoid timeouts. All inputs come from the parsed `.md` + `render-meta` (Step 4/5) and, for Strategy B mode previews, the `COLLECTION_ID` / `MODE_ID` resolved in Step 6.
 
 #### Strategy A: Simple Layout
 
-For each variant in the data, run the following script. Replace all `__PLACEHOLDER__` values with actual data. `__TABLES_JSON__` is the tables array for this variant (each element has `element`, `token`, `notes`, and optionally `compositeChildren` — an array of `{ element, value, notes }` objects for multi-layer style breakdowns).
+For each variant in the data, run the following script. Replace all `__PLACEHOLDER__` values with actual data. `__TABLES_JSON__` is the tables array for this variant (each element has `element`, `token`, `notes`, and optionally `compositeChildren` — an array of `{ element, value, notes }` objects for multi-layer style breakdowns). All values are the verbatim `.md` strings parsed in Step 0.
 
-- `__COMPONENT_SET_NODE_ID__` is the node ID of the component set (from Step 4b extraction: `compSetNodeId`). Set to `''` if not available.
-- `__VARIANT_PROPERTIES_JSON__` is an object mapping **Figma property keys** (exactly as returned by `componentPropertyDefinitions`) to values for this variant. Set to `{}` if not available.
+- `__COMPONENT_SET_NODE_ID__` is the node ID of the component set (`render-meta.component.compSetNodeId`). Set to `''` if not available.
+- `__VARIANT_PROPERTIES_JSON__` is an object mapping **Figma property keys** to values for this variant (re-derived in Step 5 from `render-meta.variantAxes`). Set to `{}` if not available.
 - `__FONT_FAMILY__` is the `fontFamily` value from `uspecs.config.json` (default: `Inter`).
-- `__BOOLEAN_UNHIDES_JSON__` is an array of `{ booleanRawKey: string }` objects derived from `booleanDelta.booleanPropsToggled` in the extraction output. Set to `[]` if `booleanDelta.deltaCount === 0`.
+- `__BOOLEAN_UNHIDES_JSON__` is `BOOLEAN_UNHIDES` (= `render-meta.booleanDefs[]` keys reshaped to `[{ booleanRawKey }]`). Set to `[]` if `booleanDefs` is empty.
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -945,15 +529,15 @@ return { success: true, variant: VARIANT_NAME };
 
 #### Strategy B: Consolidated Multi-Column Layout
 
-For each variant in the data, run the following script. Replace all `__PLACEHOLDER__` values with actual data.
+For each section in the data, run the following script. Replace all `__PLACEHOLDER__` values with actual data.
 
-- `__STATE_COLUMNS_JSON__` is the ordered array of state names that become column headers (e.g. `["Enabled", "Hovered", "Pressed", "Active", "Disabled"]`).
-- `__STATE_AXIS_NAME__` is the Figma variant axis name for states (e.g. `"State"`).
-- `__TABLES_JSON__` is the tables array for this variant. Each element has `element`, `tokensByState` (object mapping state name → token), `notes`, and optionally `compositeChildren` — an array of `{ element, value, notes }` objects for multi-layer style breakdowns.
-- `__COLLECTION_ID__` is the variable collection ID for mode-controlled colors (e.g. `"VariableCollectionId:6006:13874"`). Set to `''` if not mode-controlled.
-- `__MODE_ID__` is the variable mode ID for this section (e.g. `"6006:2"` for Gray). Set to `''` if not mode-controlled.
+- `__STATE_COLUMNS_JSON__` is the ordered array of **raw Figma state values** that become column headers and drive `setProperties` (re-derived in Step 5 by zipping the relabeled `.md` headers back through `stateAxisMapping`). e.g. `["Enabled", "Hovered", "Pressed", "Active", "Disabled"]`.
+- `__STATE_AXIS_NAME__` is the Figma variant axis name for states (e.g. `"State"`), from Step 5.
+- `__TABLES_JSON__` is the tables array for this section. Each element has `element`, `tokensByState` (object mapping **raw Figma state value** → token cell verbatim from the `.md`), `notes`, and optionally `compositeChildren` — an array of `{ element, value, notes }` objects for multi-layer style breakdowns.
+- `__COLLECTION_ID__` is the variable collection ID for mode-controlled colors (from the Step 6 whitelisted read). Set to `''` if not mode-controlled.
+- `__MODE_ID__` is the variable mode ID for this section (from the Step 6 whitelisted read, matched by mode name). Set to `''` if not mode-controlled.
 - `__FONT_FAMILY__` is the `fontFamily` value from `uspecs.config.json` (default: `Inter`).
-- `__BOOLEAN_UNHIDES_JSON__` is an array of `{ booleanRawKey: string }` objects derived from `booleanDelta.booleanPropsToggled` in the extraction output. Set to `[]` if `booleanDelta.deltaCount === 0`.
+- `__BOOLEAN_UNHIDES_JSON__` is `BOOLEAN_UNHIDES` (= `render-meta.booleanDefs[]` keys reshaped to `[{ booleanRawKey }]`). Set to `[]` if `booleanDefs` is empty.
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -1283,41 +867,46 @@ tableTemplate.remove();
 return { success: true, variant: VARIANT_NAME };
 ```
 
-### Step 12: Visual Validation
+### Step 11: Visual Validation
 
 1. `figma_take_screenshot` with the `frameId` — Capture the completed annotation
 2. Verify:
-   - All variant sections are present with correct titles (for mode-controlled components: one section per Type × Mode combination)
-   - Tables within each variant have correct element-to-token mappings with resolved semantic tokens
-   - **Strategy B previews**: Each variant's preview container shows **all state instances side by side with labels** (e.g., Enabled, Hovered, Pressed, Active, Disabled)
+   - All variant/section sections are present with correct titles (for mode-controlled components: one section per Type × Mode combination, matching the `.md` section headings)
+   - Tables within each variant/section have correct element-to-token mappings — every token cell matches the `.md` **verbatim** (`tokenName (#RRGGBB)` / bare hex / `none`); no token was re-resolved or reformatted
+   - **Strategy B previews**: Each section's preview container shows **all state instances side by side with labels** (the raw Figma state values), and the variant children resolved correctly via `setProperties` on the re-derived `STATE_COLUMNS`
    - **Strategy A previews**: Each variant's preview container shows a labeled component instance
-   - For mode-controlled components, preview instances display the correct color mode
+   - For mode-controlled components, preview instances display the correct color mode (the `COLLECTION_ID` / `MODE_ID` from the Step 6 whitelisted read)
    - **Composite breakdowns**: Elements with multi-layer styles show nested child rows with hierarchy indicators (vertical line + elbow for middle children, elbow-only for last child). Top-level rows have indicators hidden.
    - General notes are visible or hidden as expected
-3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
+3. Fix any mismatch by re-parsing the `.md` (or, if a `.md` value is itself wrong, flag it — re-run `create-component-md`); never by re-extracting from Figma. Re-capture (up to 3 iterations).
 
-### Step 13: Completion Link
+### Step 12: Completion Link
 
-Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 9), replacing `:` with `-` in the node ID:
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (`render-meta.fileKey`) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID. Append the provenance footer recording the `sourceHash` from `render-meta` (so drift between this `.md` and its `_base.json` is auditable):
 
 ```
 Color spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+Source: {mdPath} (render-meta sourceHash: {sourceHash}) — rows tagged `md`; mode/variant resolution tagged `measured`.
 ```
 
 ## Notes
 
 - The color annotation template key is stored in `uspecs.config.json` under `templateKeys.colorAnnotation` and is configured via {{skill:firstrun}}.
-- The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, it is treated as a single-entry variant array and there are no variant axes. Preview instance creation in Step 11 uses the component directly for standalone components.
-- Three-level cloning: variants → tables → rows. Each variant section is cloned from `#variant-template`, each table from `#color-table-template`, and each row from `#element-row-template`.
-- **Template defaults:** `#variant-template` is hidden by default (`visible=false`) — cloned variants must be set to `visible=true`. No post-render hiding step is needed. The `#hierarchy-indicator` frame inside `#element-row-template` is also hidden by default with both vectors (`within-group`, `#hierarchy-indicator-last`) hidden — only composite child rows need to show it.
+- **This skill consumes the component `.md`** (the source of truth produced by {{skill:create-component-md}}) and renders its Color section into Figma. It does NOT extract from Figma — see the Step 0 FORBIDDEN directive. The `compSetNodeId`, variant axes, boolean defs, strategy, tokens, hex values, and per-state columns all come from the `.md`'s Color body + `render-meta`. The only live read is the single whitelisted `getLocalVariableCollectionsAsync()` call (Strategy B mode-controlled only) used to resolve `COLLECTION_ID` / `MODE_ID`.
+- The target node referenced by `render-meta.component.compSetNodeId` can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant); the render script handles both via `defaultVariant || children[0]` and scored variant matching. When the node is a standalone component, the Color body has a single variant entry and no variant axes.
+- **Strategy detection comes from the `.md` table shape**, not from a live axis classification: `Element | Token | Notes` ⇒ Strategy A; `Element | {state…} | Notes` ⇒ Strategy B. The producer (`extract-color` → `create-component-md`) already chose the strategy; this skill only mirrors it.
+- **Token cells are verbatim.** The producer applies the `tokenName (#RRGGBB)` hex-in-token formatter (and bare-hex / `none` fallbacks). This skill passes those exact strings into the template text nodes — it never re-resolves a variable binding or recomputes a hex. Composite-style children arrive as `└`/`├`-prefixed rows and are rendered with the template's hierarchy indicators.
+- **Strategy B state columns:** the `.md`'s state column headers may be runtime-condition relabeled. The render script needs raw Figma state values to drive `setProperties` (variant scoring) and mode previews, so Step 5 zips each relabeled header back to its `stateAxisMapping[].figmaValue`. If the zip is not 1:1 the section is aborted with a diagnostic rather than rendered against guessed states. When headers are not relabeled they are already raw Figma values and used as-is.
+- **Boolean unhides:** the preview-instance unhide set is the full `render-meta.booleanDefs[]` key set. The elements those toggles reveal are already merged into the `.md` tables by `create-component-md`; the unhide set only ensures the live preview shows them.
+- Three-level cloning: variants/sections → tables → rows. Each variant/section is cloned from `#variant-template`, each table from `#color-table-template`, and each row from `#element-row-template`.
+- **Template defaults:** `#variant-template` is hidden by default (`visible=false`) — cloned variants must be set to `visible=true`. No post-render hiding step is needed. The `#hierarchy-indicator` frame inside `#element-row-template` is hidden by default with both vectors (`within-group`, `#hierarchy-indicator-last`) hidden — only composite child rows show it.
 - Preview instructions: The `#preview-instruction-light` frame contains multiple TEXT nodes. The second TEXT node (index 1) receives the preview text formatted as "{ComponentName} {VariantName}".
-- The extraction script (Step 4b) supports smart sampling via `SKIP_AXES` — pass color-irrelevant axes and their default values to avoid extracting redundant variants. For components with few variants (≤ 10), extracting all variants is fine.
-- The instruction file (`{{ref:color/agent-color-instruction.md}}`) contains the data structure reference, examples, and element-to-token mapping rules that guide the analysis phase.
-- Preview frames: Each variant section has a light theme preview container. The `Placeholder` child is removed and replaced with live component instances.
+- The instruction file (`{{ref:color/agent-color-instruction.md}}`) is consulted **only** to reason about how a parsed table maps to template structure. Strategy selection, token resolution, axis classification, and mode detection already happened upstream and are baked into the `.md` — this skill does not redo them.
+- Preview frames: Each variant/section has a light theme preview container. The `Placeholder` child is removed and replaced with live component instances.
   - **Strategy A**: One labeled instance per container (wrapper frame with instance + text label).
-  - **Strategy B**: Multiple labeled instances per container — one per state column. Each instance is wrapped in a vertical frame with a text label showing the state name (e.g., "Enabled", "Hovered"). The preview container uses `HORIZONTAL` layout with `itemSpacing: 24` so instances flow left to right.
-- **Mode-controlled previews**: For components with a variable mode collection (e.g., "Tag color"), each preview instance wrapper has `setExplicitVariableModeForCollection(collection, modeId)` applied so the correct color mode renders. After creating each instance, `clearModesRecursive` is called to remove any baked-in modes so the instance inherits from the wrapper.
-- **Mode-expanded sections**: When `hasModeCollection: true`, every mode is rendered as its own section(s) — one per Type × Mode combination. Section names use the format `"{Type} / {Mode}"` (e.g., "Primary / Gray"). Tokens are resolved per mode via `modeDetection.modeTokenMap` from the extraction output. The `collectionId` and `modeId` are passed to the rendering script for preview mode application.
+  - **Strategy B**: Multiple labeled instances per container — one per state column (raw Figma state value). Each instance is wrapped in a vertical frame with a text label showing the state name. The preview container uses `HORIZONTAL` layout with `itemSpacing: 24` so instances flow left to right.
+- **Mode-controlled previews**: For components with a variable mode collection, each preview instance wrapper has `setExplicitVariableModeForCollection(collection, modeId)` applied so the correct color mode renders. After creating each instance, `clearModesRecursive` removes any baked-in modes so the instance inherits from the wrapper. The `COLLECTION_ID` / `MODE_ID` come from the single whitelisted `getLocalVariableCollectionsAsync()` read (Step 6), matched by the collection/mode names surfaced in the `.md`'s Cross-section invariants bullet and section titles.
+- **Mode-expanded sections**: When the `.md` is mode-controlled, every mode is its own Strategy B section — one per Type × Mode combination, e.g. `"Primary / Gray"`. Tokens are already resolved per mode in the `.md`; this skill only applies the matching `MODE_ID` to the section's previews.
 - The script uses scored variant matching (exact match first, then best partial match by score) to find the correct variant child directly, rather than creating from the default and calling `setProperties()`. This handles sparse component sets where some variant combinations may not exist.
-- **Column header rename:** The template's `#state-title` layer originally displays "State", but the column actually holds token names. Strategy A renames this to "Token" at render time. Strategy B replaces the column entirely with per-state columns.
-- **Two rendering strategies:** Step 4c determines whether to use Strategy A or Strategy B based on the two-gate model in Step 4c-i. Strategy B clones the `#state-title` / `#state-name` cells N times (one per state). All cloned state columns and the Notes column use `layoutSizingHorizontal = 'FILL'` so Figma's auto-layout distributes width equally — no hardcoded pixel widths needed.
+- **Column header rename:** The template's `#state-title` layer originally displays "State". Strategy A renames it to "Token" at render time (the column holds token names). Strategy B replaces the column entirely with per-state columns.
+- **Provenance:** every emitted row is sourced from the `.md` and tagged `md`; the variant/mode resolution the render path performs (scored matching, `MODE_ID` application) is tagged `measured`; nothing is `inferred` unless a parsed cell is missing and you must note a drift fill. The completion footer records the `render-meta` `sourceHash`.

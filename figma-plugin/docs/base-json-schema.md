@@ -16,7 +16,8 @@ Downstream interpretation skills (`extract-api`, `extract-structure`, `extract-c
     "fileKey": "<figma file key>",
     "nodeId": "<compound or simple node id>",
     "componentSlug": "<slug>",
-    "optionalContext": "<string or null>"
+    "optionalContext": "<string or null>",
+    "figmaUrl": "<canonical component deep link, or null>"
   },
 
   "component": {

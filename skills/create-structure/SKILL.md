@@ -7,6 +7,13 @@ description: Generate structure specifications documenting component dimensions,
 
 Generate a structure specification directly in Figma — tables documenting all dimensional properties of a component, organized into sections by variant axis or sub-component, with dynamic columns for size/density variants.
 
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the structure spec into Figma from the input `.md`.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input component `.md` is a **READ-ONLY source of truth. Never edit, append to, or "add a section" to it.** The only artifact this skill produces is the Figma annotation. When the user asks to "create/add a section," "show," or "include" something, render it **in the Figma annotation**, never as an edit to the `.md`.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) Step 0 fail-fast when no `.md` resolves; (b) one-line abort if the Figma MCP connection is dead.
+
 ## MCP Adapter
 
 Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.
@@ -37,9 +44,11 @@ This walks up to the PAGE ancestor and loads its content. Console MCP does not n
 
 ## Inputs Expected
 
-- **Figma link to the component**: Required — URL to a component set or standalone component in Figma
-- **Figma link to the destination** (optional): URL to the page/frame where the spec should be placed. If omitted, places it in the same file as the component.
-- **Description** (optional): Component name, specific properties to document, sub-components to include
+- **Component `.md` spec** (**required**, user-provided path) — the source-of-truth component spec produced by {{skill:create-component-md}}. **The user tells you where this `.md` lives** — use the exact path they provide; the `.md` may live anywhere. This skill **renders the Structure section from the `.md`**; it does NOT re-extract anything from Figma. `fileKey`, `nodeId`, and `compSetNodeId` come from the `.md`'s `render-meta` block, never from the Figma link.
+- **Figma link to the destination** (optional) — placement hint only (which page/frame to drop the rendered spec on, including the cross-file destination). Never the source of structural facts.
+- **Description** (optional) — a human nudge (component name, which sections to emphasize). Never a source of dimensions.
+
+There is no screenshot-only path and no component-link extraction path. Without the component `.md` there is nothing to render — see Step 0's fail-fast contract.
 
 ## Workflow
 
@@ -47,28 +56,60 @@ Copy this checklist and update as you progress:
 
 ```
 Task Progress:
-- [ ] Step 1: Read instruction file
+- [ ] Step 0: Require + parse the component `.md` (Structure body + render-meta). FAIL FAST if missing.
+- [ ] Step 1: Read instruction file (only as needed for row-emission conventions — NOT for re-extraction)
 - [ ] Step 2: Verify MCP connection
 - [ ] Step 3: Read template key from uspecs.config.json
-- [ ] Step 4a: Visual and structural context (navigate, screenshot, file data)
-- [ ] Step 4b: Run enhanced extraction script (sub-components, booleans, tokens, collapsed dimensions)
-- [ ] Step 4c: Check variable modes
-- [ ] Step 4d: Cross-variant dimensional comparison (deterministic script)
-- [ ] Step 4e: Non-dimensional axis diff (measure all other axes for structural/property differences)
-- [ ] Step 5: Navigate to destination (if different file)
-- [ ] Step 6: AI interpretation layer — build section plan, write design-intent notes, detect anomalies, judge completeness
-- [ ] Step 6b: Run targeted extractions for structural axes identified in Step 6
-- [ ] Step 7: Generate structured data (component name, general notes, sections with columns and rows)
-- [ ] Step 8: Re-read instruction file (Common Mistakes, Do NOT sections) and audit
+- [ ] Step 4: Build render inputs from the parsed .md (sections, COLUMNS, ROWS, general notes, provenance) + render-meta (compSetNodeId, variantAxesDefaults, subComponents, slotContents, booleanDefs) — NO extraction
+- [ ] Step 5: Navigate to destination (if a separate destination file was provided)
+- [ ] Step 6: Re-derive each section's sectionType via the Step 11a decision table (match columns to variantAxes; {slot} — {comp}; subComponents[].name) — NO live reads
+- [ ] Step 7: Audit the assembled render inputs against the .md
 - [ ] Step 9: Import and detach the Structure template
 - [ ] Step 10: Fill header fields
-- [ ] Step 11: For each section → render table, determine preview params, populate preview
+- [ ] Step 11: For each section → render table, determine preview params, populate preview + canvas measurements
 - [ ] Step 12: Visual validation
+- [ ] Step 13: Completion link
 ```
 
-### Step 1: Read Instructions
+### Step 0: Require and parse the component `.md` (fail fast)
 
-Read [agent-structure-instruction.md]({{ref:structure/agent-structure-instruction.md}})
+**This skill is a consumer of the `.md` source of truth.** It does not re-extract from Figma and does not re-run the dimensional measurement / section-planning layer — that work already happened in `extract-structure`/`create-component-md` and is baked into the `.md`'s Structure section. Your job is to render that section into a Figma frame.
+
+1. **Resolve the `.md` path.** Use the exact path the user gave, else an attached or open `.md` in context. The `.md` may live anywhere; do NOT invent or guess a path. If neither resolves to an existing file, abort per item 2. Never pause to ask the user which file to use.
+2. **Require the file.** If no file exists at the resolved `.md` path, **abort immediately** with this exact single-line diagnostic and stop — do NOT fall back to extraction:
+
+   > This skill requires the component's Markdown `.md` spec (produced by create-component-md). Provide the path to it. (create-component-md needs a _base.json from the uSpec Extract plugin.)
+
+3. **Parse the Structure section** (`## Structure`) from the `.md` body. Its layout is defined in `references/component-md/agent-component-md-instruction.md` § **Structure body rendering**:
+   - **Confidence header** — the leading italic line (`_Confidence: …_`). Carry it for the Step 7 audit; it does not render into Figma.
+   - **General notes** — the blockquote immediately under the confidence header (if present) → `GENERAL_NOTES`.
+   - **Typography subsection** (`### Typography`, when present) — a consolidated per-element index. **Skip it when rebuilding row identity** — the per-section typography rows below remain authoritative. Do not emit a separate render section or preview for it.
+   - **State deltas subsection** (`### State deltas` / `### {axis} deltas`, when present) — non-dimensional deltas across an axis. Capture it as a candidate state-conditional section, but **dedupe against the dimensional sections** so a property that already appears in a dimensional section is not double-emitted.
+   - **Dimensional sections** — each remaining `###` sub-section is one render section: heading = `sectionName`, optional description paragraph, then a Markdown table whose header row is `section.columns`. Parse each section into `{ sectionName, sectionDescription, columns: COLUMNS_JSON, rows: ROWS_JSON }`.
+   - **Rows** — for every table row build `{ spec, values, notes, isSubProperty, isLastInGroup, provenance }`:
+     - `spec` — the first column with the hierarchy arrow and provenance badge **stripped** to the bare property name. A leading `└ ` means `isSubProperty: true, isLastInGroup: true`; a leading `├ ` means `isSubProperty: true, isLastInGroup: false`; no arrow means `isSubProperty: false`.
+     - `provenance` — `inferred` when the cell carried a `[inferred via <token>]` (or `[inferred]`) badge, `not-measured` when it carried `[unmeasured]`, otherwise `measured`. Tag rows that are purely textual / non-dimensional (sizing modes, alignment, typography style names) as `md`.
+     - `values` — the pre-formatted `display` cells **verbatim** (e.g. `spacing-100 (16)`, `—`). Do not reformat or recompute them.
+     - `notes` — the last column verbatim.
+4. **Parse the `render-meta` block** (the fenced JSON between `<!-- render-meta:start v=1 -->` and `<!-- render-meta:end -->`; schema in `agent-component-md-instruction.md` § **RENDER_META_JSON**):
+   - `COMP_SET_ID` = `component.compSetNodeId`.
+   - `variantAxes` / `variantAxesDefaults` — for Step 6 section-type derivation and Step 11a preview props.
+   - `BOOLEAN_DEFS` = reshape `booleanDefs[]` → `{ [key]: default }`. Each `key` is the raw component-property key `setProperties` expects.
+   - `subComponents[]` — `{ name, mainComponentName, subCompSetId, subCompVariantAxes, subCompVariantAxesDefaults, booleanOverrides }` for sub-component sections.
+   - `slotContents[]` — `{ slotName, slotNodeType, preferredComponents: [{ componentKey, componentName, componentId, componentSetId, isComponentSet, variantAxes, booleanDefs }] }` for slot-content sections.
+   - `sectionTargets` / `groupTargets` — per-section / per-group `{ name, nodeId }` (available if a render script needs to resolve a section or group header back to a live node; preview resolution otherwise stays name-match on the live instance).
+   - `fileKey`, `nodeId` — for the Step 13 completion link and template placement.
+   - `sourceHash` — retain it; it identifies the `_base.json` this `.md` was rendered from (drift detection / provenance footer).
+
+**FORBIDDEN — do NOT re-extract.** When the component `.md` is present (it always is past Step 0), you MUST NOT run the legacy extraction/tree-walk. Specifically:
+- Do NOT run the deleted **Step 4b enhanced extraction script** (`extractDimensions` / `extractChildren` / `extractTypography` / `buildLayoutTree` / the SLOT `preferredValues` resolver), the deleted **Step 4d cross-variant dimensional comparison script**, the deleted **Step 4e non-dimensional axis-diff script**, or the deleted **Step 6b targeted structural-axis re-extraction**. These scripts no longer exist in this skill.
+- Do NOT re-run the old Step 4a `figma_navigate` / `figma_take_screenshot` / `figma_get_file_data` context-gathering, or the Step 4c `figma_get_variables` mode walk. Dimensions, tokens, sub-components, slot contents, variant axes, and boolean defs are authored in the `.md` + `render-meta` and consumed verbatim.
+- Do NOT re-derive the section plan, re-measure dimensions, or re-classify axes from a live walk. Section identity, columns, rows, and provenance come from the parsed `.md`; section *type* is re-derived in Step 6 from the parsed columns + `render-meta` (no live reads).
+- The ONLY Figma calls this skill makes are the **render scripts**: template import/clone (Step 9), header fill (Step 10), and per-section table + preview + canvas-measurement rendering (Step 11). Those resolve elements by name-match on the live rendered/preview instance and read live `bbox` for measurement overlays — that is the cleanest case and needs **no** whitelisted live extraction read.
+
+### Step 1: Read Instructions (only as needed)
+
+The dimensions, sections, columns, rows, notes, and provenance are already authored in the `.md` — you do NOT re-derive them. Read [agent-structure-instruction.md]({{ref:structure/agent-structure-instruction.md}}) **only** if you need to recall a row-emission convention while shaping render inputs (e.g. how collapsed padding maps to `paddingTop`/`paddingBottom` rows, logical-direction naming, or the annotation allowlist vocabulary). Never use it as a prompt to re-extract.
 
 ### Step 2: Verify MCP Connection
 
@@ -91,892 +132,28 @@ Read the file `uspecs.config.json` and extract:
 If the template key is empty, tell the user:
 > The structure template key is not configured. Run {{skill:firstrun}} with your Figma template library link first.
 
-### Step 4: Gather Context
+### Step 4: Build render inputs from the parsed `.md` (no extraction)
 
-Navigate to the component file and extract structural data using MCP tools.
+Everything the render scripts need is already in the `.md` you parsed in Step 0. Assemble the render inputs directly — there is **no extraction call** here (see the FORBIDDEN directive in Step 0).
 
-**Extract the node ID from the URL:** Figma URLs contain `node-id=123-456` → use `123:456`.
+Build these values:
 
-**4a. Visual and structural context:**
-1. `figma_navigate` — Go to the component URL
-2. `figma_take_screenshot` — See the component and its variants
-3. `figma_get_file_data` — Get component set structure with variant axes
-4. `figma_get_component` — Get detailed component data for a specific instance
-5. `figma_get_component_for_development` — Get component data with visual reference
+- **`COMPONENT_NAME`** — `render-meta.component.componentName` (fallback: the `.md`'s `# {name}` H1).
+- **`GENERAL_NOTES`** — the Structure section's general-notes blockquote, verbatim (empty when absent).
+- **`SECTIONS`** — one entry per parsed dimensional `###` sub-section, in document order: `{ sectionName, sectionDescription, columns: COLUMNS_JSON, rows: ROWS_JSON }`. `COLUMNS_JSON` is the table header row verbatim (first column `Spec`/`Composition`, last column `Notes`). `ROWS_JSON` is the parsed rows (`{ spec, values, notes, isSubProperty, isLastInGroup, provenance }`) with the pre-formatted `display` cells copied verbatim. The `### State deltas` subsection becomes a state-conditional `SECTIONS` entry; the `### Typography` index is **not** a section — its rows already live inline in the per-section tables.
+- **`COMP_SET_ID`** — `render-meta.component.compSetNodeId`.
+- **`VARIANT_AXES`** / **`VARIANT_AXES_DEFAULTS`** — `render-meta.variantAxes` / `render-meta.variantAxesDefaults`. Used in Step 6 (section-type derivation) and Step 11a (preview props).
+- **`BOOLEAN_DEFS`** — reshape `render-meta.booleanDefs[]` → `{ [key]: default }` (raw component-property keys `setProperties` expects).
+- **`SUB_COMPONENTS`** — `render-meta.subComponents[]` (`name`, `mainComponentName`, `subCompSetId`, `subCompVariantAxes`, `subCompVariantAxesDefaults`, `booleanOverrides`). Drives sub-component section previews.
+- **`SLOT_CONTENTS`** — `render-meta.slotContents[]` (`slotName`, `preferredComponents[].{componentId, componentSetId, isComponentSet, variantAxes, booleanDefs}`). Drives slot-content section previews.
 
-**4b. Run the enhanced extraction script** via `figma_execute`. Replace `__NODE_ID__` with the actual node ID. This script performs sub-component discovery, boolean enumeration, token binding resolution, and returns a collapsed/expanded dimensional model with logical direction normalization and pre-formatted display strings.
+**Provenance.** Each parsed row carries a `provenance` tag (`md` / `measured` / `inferred` / `not-measured`) from Step 0.3 — keep it on the row so the Step 7 audit can confirm `[unmeasured]` rows render with `—` value cells and `inferred` rows keep their `[inferred via <token>]` reasoning in `notes`. Retain `render-meta.sourceHash` alongside the inputs as the provenance fingerprint of the `_base.json` this `.md` was rendered from.
 
-> **Maintainer note — defensive property reads.** The Figma plugin API throws synchronously when reading auto-layout properties (`itemSpacing`, `counterAxisSpacing`, `padding*`, `layoutMode`, `layoutSizing*`, `clipsContent`, primary/counter axis aligns) on nodes that don't support them — most commonly TEXT, VECTOR, and GROUP children. Guards like `node[p] !== undefined && node[p] !== figma.mixed` run the access *first* and so do not protect against the throw. The Steps 4b, 4d, and 4e scripts wrap every `node[p]` read in `try { ... } catch {}` and gate layout-only property groups on `isContainer = 'layoutMode' in node` (mirroring the `sg(node, prop)` accessor in `figma-plugin/src/safe.ts`). When extending these scripts with new property reads, follow the same pattern.
+Row identity is rebuilt from the parsed table rows, **not** from the Typography index, and the State-deltas section is deduped against the dimensional sections so a property is never emitted twice.
 
-```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
+Each `SECTIONS` entry's `sectionType` (which preview Step 11a renders) is derived in Step 6.
 
-async function resolveBinding(node, prop) {
-  const bindings = node.boundVariables;
-  if (!bindings || !bindings[prop]) return null;
-  const binding = Array.isArray(bindings[prop]) ? bindings[prop][0] : bindings[prop];
-  if (!binding?.id) return null;
-  try {
-    const v = await figma.variables.getVariableByIdAsync(binding.id);
-    if (v) return v.name;
-  } catch {}
-  return null;
-}
-
-async function resolveTextStyle(textNode) {
-  if (textNode.textStyleId && typeof textNode.textStyleId === 'string' && textNode.textStyleId !== '') {
-    try {
-      const style = await figma.getStyleByIdAsync(textNode.textStyleId);
-      if (style) return style.name;
-    } catch {}
-  }
-  return null;
-}
-
-function rv(v) { return Math.round(v * 10) / 10; }
-
-function makeDisplayString(value, token) {
-  if (token) return token + ' (' + value + ')';
-  return String(value);
-}
-
-function collapsePadding(pT, pB, pS, pE, tT, tB, tS, tE) {
-  const vT = rv(pT || 0), vB = rv(pB || 0);
-  const vS = rv(pS || 0), vE = rv(pE || 0);
-  if (vT === vB && vS === vE && vT === vS && tT === tB && tS === tE && tT === tS) {
-    return { value: vT, token: tT || null, display: makeDisplayString(vT, tT) };
-  }
-  if (vT === vB && vS === vE && tT === tB && tS === tE) {
-    return {
-      vertical: { value: vT, token: tT || null, display: makeDisplayString(vT, tT) },
-      horizontal: { value: vS, token: tS || null, display: makeDisplayString(vS, tS) }
-    };
-  }
-  return {
-    top: { value: vT, token: tT || null, display: makeDisplayString(vT, tT) },
-    bottom: { value: vB, token: tB || null, display: makeDisplayString(vB, tB) },
-    start: { value: vS, token: tS || null, display: makeDisplayString(vS, tS) },
-    end: { value: vE, token: tE || null, display: makeDisplayString(vE, tE) }
-  };
-}
-
-function collapseCornerRadius(tl, tr, bl, br, tTL, tTR, tBL, tBR) {
-  if (tl === tr && tr === bl && bl === br && tTL === tTR && tTR === tBL && tBL === tBR) {
-    return { value: tl, token: tTL || null, display: makeDisplayString(tl, tTL) };
-  }
-  return {
-    topStart: { value: tl, token: tTL || null, display: makeDisplayString(tl, tTL) },
-    topEnd: { value: tr, token: tTR || null, display: makeDisplayString(tr, tTR) },
-    bottomStart: { value: bl, token: tBL || null, display: makeDisplayString(bl, tBL) },
-    bottomEnd: { value: br, token: tBR || null, display: makeDisplayString(br, tBR) }
-  };
-}
-
-async function extractDimensions(node) {
-  const dims = {};
-  const isContainer = 'layoutMode' in node;
-  const universalProps = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'];
-  const containerProps = isContainer ? ['itemSpacing', 'counterAxisSpacing'] : [];
-  for (const p of [...universalProps, ...containerProps]) {
-    try {
-      const val = node[p];
-      if (val !== undefined && val !== null && val !== figma.mixed) {
-        const token = await resolveBinding(node, p);
-        const v = rv(val);
-        dims[p] = { value: v, token: token || null, display: makeDisplayString(v, token) };
-      }
-    } catch {}
-  }
-
-  if (isContainer) {
-    try {
-      const tPT = await resolveBinding(node, 'paddingTop');
-      const tPB = await resolveBinding(node, 'paddingBottom');
-      const tPS = await resolveBinding(node, 'paddingLeft');
-      const tPE = await resolveBinding(node, 'paddingRight');
-      if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
-        dims.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
-      }
-    } catch {}
-  }
-
-  try {
-    if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
-      if (node.cornerRadius === figma.mixed) {
-        const tTL = await resolveBinding(node, 'topLeftRadius');
-        const tTR = await resolveBinding(node, 'topRightRadius');
-        const tBL = await resolveBinding(node, 'bottomLeftRadius');
-        const tBR = await resolveBinding(node, 'bottomRightRadius');
-        dims.cornerRadius = collapseCornerRadius(
-          rv(node.topLeftRadius || 0), rv(node.topRightRadius || 0),
-          rv(node.bottomLeftRadius || 0), rv(node.bottomRightRadius || 0),
-          tTL, tTR, tBL, tBR
-        );
-      } else {
-        const token = await resolveBinding(node, 'cornerRadius');
-        const v = rv(node.cornerRadius);
-        dims.cornerRadius = { value: v, token: token || null, display: makeDisplayString(v, token) };
-      }
-    }
-  } catch {}
-
-  try {
-    if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
-      if (node.strokeWeight === figma.mixed) {
-        const sides = {};
-        for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
-          try {
-            if (node[s] !== undefined) {
-              const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
-              sides[logicalKey] = { value: rv(node[s]), token: null, display: String(rv(node[s])) };
-            }
-          } catch {}
-        }
-        dims.strokeWeight = sides;
-      } else {
-        const token = await resolveBinding(node, 'strokeWeight');
-        const v = rv(node.strokeWeight);
-        dims.strokeWeight = { value: v, token: token || null, display: makeDisplayString(v, token) };
-      }
-    }
-  } catch {}
-
-  if (isContainer) {
-    try { if (node.layoutMode && node.layoutMode !== 'NONE') dims.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode }; } catch {}
-    try { if (node.primaryAxisAlignItems) dims.primaryAxisAlignItems = { value: node.primaryAxisAlignItems, token: null, display: node.primaryAxisAlignItems }; } catch {}
-    try { if (node.counterAxisAlignItems) dims.counterAxisAlignItems = { value: node.counterAxisAlignItems, token: null, display: node.counterAxisAlignItems }; } catch {}
-    try { if (node.layoutSizingHorizontal) dims.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal }; } catch {}
-    try { if (node.layoutSizingVertical) dims.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical }; } catch {}
-    try { if (node.clipsContent !== undefined) dims.clipsContent = { value: node.clipsContent, token: null, display: String(node.clipsContent) }; } catch {}
-  }
-
-  return dims;
-}
-
-async function extractTypography(node) {
-  if (node.type !== 'TEXT') return null;
-  const styleName = await resolveTextStyle(node);
-  if (styleName) return { styleName };
-  const props = {};
-  if (typeof node.fontSize === 'number') props.fontSize = node.fontSize;
-  if (typeof node.fontName === 'object') {
-    props.fontFamily = node.fontName.family;
-    props.fontWeight = node.fontName.style;
-  }
-  if (node.lineHeight && typeof node.lineHeight === 'object' && node.lineHeight.unit !== 'AUTO') {
-    props.lineHeight = node.lineHeight.value;
-  }
-  if (node.letterSpacing && typeof node.letterSpacing === 'object' && node.letterSpacing.value !== 0) {
-    props.letterSpacing = parseFloat(node.letterSpacing.value.toFixed(2));
-  }
-  return Object.keys(props).length > 0 ? props : null;
-}
-
-async function extractChildren(container, depth, discoverSubComps) {
-  if (depth === undefined) depth = 0;
-  const children = [];
-  for (const child of container.children) {
-    const entry = {
-      name: child.name,
-      type: child.type,
-      visible: child.visible,
-      dimensions: await extractDimensions(child)
-    };
-    if (child.type === 'TEXT') {
-      entry.typography = await extractTypography(child);
-    }
-    if (child.type === 'INSTANCE') {
-      try {
-        const mc = await child.getMainComponentAsync();
-        if (mc) {
-          entry.mainComponentName = mc.name;
-          const parentSet = mc.parent && mc.parent.type === 'COMPONENT_SET' ? mc.parent : null;
-          entry.parentSetName = parentSet ? parentSet.name : mc.name;
-          if (discoverSubComps && depth === 0) {
-            const subCompSet = mc.parent && mc.parent.type === 'COMPONENT_SET' ? mc.parent : null;
-            entry.subCompSetId = subCompSet ? subCompSet.id : mc.id;
-            if (subCompSet && subCompSet.variantGroupProperties) {
-              entry.subCompVariantAxes = {};
-              for (const [k, v] of Object.entries(subCompSet.variantGroupProperties)) {
-                entry.subCompVariantAxes[k] = v.values;
-              }
-            }
-            const instProps = child.componentProperties;
-            if (instProps) {
-              entry.booleanOverrides = {};
-              for (const [key, val] of Object.entries(instProps)) {
-                if (val.type === 'BOOLEAN') entry.booleanOverrides[key] = val.value;
-              }
-            }
-          }
-        }
-      } catch {}
-    }
-    const isTopLevelInstance = depth === 0 && child.type === 'INSTANCE';
-    if ('children' in child && child.children.length > 0 && (child.type !== 'INSTANCE' || isTopLevelInstance)) {
-      entry.children = await extractChildren(child, depth + 1, false);
-    }
-    children.push(entry);
-  }
-  return children;
-}
-
-function buildLayoutTree(node, depth) {
-  if (depth === undefined) depth = 0;
-  if (!('children' in node) || node.children.length === 0) return node.name;
-  const isAutoLayout = node.layoutMode && node.layoutMode !== 'NONE';
-  const childTrees = node.children.map(c => buildLayoutTree(c, depth + 1));
-  if (!isAutoLayout && depth > 0) return childTrees.length === 1 ? childTrees[0] : childTrees;
-  return {
-    name: node.name,
-    layoutMode: node.layoutMode || 'NONE',
-    hasPadding: (node.paddingTop || 0) + (node.paddingBottom || 0) + (node.paddingLeft || 0) + (node.paddingRight || 0) > 0,
-    hasSpacing: (node.itemSpacing || 0) > 0,
-    children: childTrees
-  };
-}
-
-const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
-  return { error: 'Node is not a component set or component. Type: ' + (node ? node.type : 'null') };
-}
-
-const isComponentSet = node.type === 'COMPONENT_SET';
-const variantAxes = {};
-if (isComponentSet && node.variantGroupProperties) {
-  for (const [key, val] of Object.entries(node.variantGroupProperties)) {
-    variantAxes[key] = val.values;
-  }
-}
-
-const propDefs = node.componentPropertyDefinitions;
-const propertyDefs = {};
-const booleanDefs = {};
-if (propDefs) {
-  for (const [key, def] of Object.entries(propDefs)) {
-    propertyDefs[key] = { type: def.type, defaultValue: def.defaultValue };
-    if (def.variantOptions) propertyDefs[key].variantOptions = def.variantOptions;
-    if (def.type === 'BOOLEAN') booleanDefs[key] = def.defaultValue;
-  }
-}
-
-const variantChildren = isComponentSet ? node.children : [node];
-const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-const defaultVProps = isComponentSet ? (defaultVariant.variantProperties || {}) : {};
-const defaultValues = {};
-for (const [axis, vals] of Object.entries(variantAxes)) {
-  defaultValues[axis] = defaultVProps[axis] || vals[0];
-}
-
-// Only vary dimension-affecting axes (Size, Density, Shape); skip visual-only (State, Mode, Theme)
-const DIMENSION_AXES = /size|density|shape/i;
-const dimensionAffectingAxes = Object.keys(variantAxes).filter(a => DIMENSION_AXES.test(a));
-const axesToVary = dimensionAffectingAxes.length > 0 ? dimensionAffectingAxes : [Object.keys(variantAxes)[0] || ''];
-
-const selectedVariants = new Set();
-for (const axis of axesToVary) {
-  const vals = variantAxes[axis] || [];
-  for (const val of vals) {
-    const props = { ...defaultValues, [axis]: val };
-    const name = Object.entries(props).map(([k, v]) => k + '=' + v).join(', ');
-    selectedVariants.add(name);
-  }
-}
-if (selectedVariants.size === 0 && variantChildren.length > 0) {
-  selectedVariants.add(variantChildren[0].name);
-}
-
-const variants = [];
-for (const variant of variantChildren) {
-  if (!isComponentSet || selectedVariants.has(variant.name)) {
-    const dims = await extractDimensions(variant);
-    variants.push({
-      name: variant.name,
-      dimensions: dims,
-      children: await extractChildren(variant, 0, true),
-      layoutTree: buildLayoutTree(variant)
-    });
-  }
-}
-
-let enrichedTree = null;
-const subComponents = [];
-const testInst = defaultVariant.createInstance();
-if (Object.keys(booleanDefs).length > 0) {
-  const enableAll = {};
-  for (const key of Object.keys(booleanDefs)) enableAll[key] = true;
-  try { testInst.setProperties(enableAll); } catch {}
-}
-enrichedTree = await extractChildren(testInst, 0, true);
-
-for (const child of enrichedTree) {
-  if (child.type === 'INSTANCE' && child.subCompSetId) {
-    subComponents.push({
-      name: child.name,
-      mainComponentName: child.mainComponentName || child.name,
-      subCompSetId: child.subCompSetId,
-      subCompVariantAxes: child.subCompVariantAxes || {},
-      booleanOverrides: child.booleanOverrides || {},
-      dimensions: child.dimensions || {},
-      children: child.children || [],
-      typography: child.typography || null
-    });
-  }
-}
-testInst.remove();
-
-// --- Resolve SLOT properties and preferred instances ---
-const slotContents = [];
-const slotPropDefs = {};
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  if (def.type === 'SLOT') slotPropDefs[rawKey] = def;
-}
-
-const hasPreferred = Object.values(slotPropDefs).some(d => d.preferredValues && d.preferredValues.length > 0);
-const allCompKeys = new Map();
-if (hasPreferred) {
-  for (const page of figma.root.children) {
-    try { await figma.setCurrentPageAsync(page); } catch { continue; }
-    const comps = page.findAll(n => n.type === 'COMPONENT' || n.type === 'COMPONENT_SET');
-    for (const c of comps) {
-      if (c.key) allCompKeys.set(c.key, c);
-      if (c.type === 'COMPONENT_SET' && 'children' in c) {
-        for (const v of c.children) { if (v.type === 'COMPONENT' && v.key) allCompKeys.set(v.key, v); }
-      }
-    }
-  }
-  let _rp = node; while (_rp.parent && _rp.parent.type !== 'DOCUMENT') _rp = _rp.parent;
-  if (_rp.type === 'PAGE') await figma.setCurrentPageAsync(_rp);
-}
-
-const slotTestInst = defaultVariant.createInstance();
-if (Object.keys(booleanDefs).length > 0) {
-  const enableAll = {};
-  for (const key of Object.keys(booleanDefs)) enableAll[key] = true;
-  try { slotTestInst.setProperties(enableAll); } catch {}
-}
-
-for (const [rawKey, def] of Object.entries(slotPropDefs)) {
-  const slotName = rawKey.split('#')[0];
-  const slotNode = slotTestInst.findOne(n => n.type === 'SLOT' && n.name === slotName);
-  const entry = {
-    slotName,
-    slotNodeType: 'SLOT',
-    preferredComponents: [],
-    defaultChildren: [],
-    slotDimensions: slotNode ? await extractDimensions(slotNode) : {}
-  };
-
-  if (slotNode && 'children' in slotNode) {
-    for (const sc of slotNode.children) {
-      const scInfo = { name: sc.name, nodeType: sc.type };
-      if (sc.type === 'INSTANCE') {
-        try {
-          const mc = await sc.getMainComponentAsync();
-          if (mc) {
-            scInfo.mainComponentName = mc.name;
-            const isSet = mc.parent && mc.parent.type === 'COMPONENT_SET';
-            scInfo.componentSetName = isSet ? mc.parent.name : mc.name;
-          }
-        } catch {}
-      }
-      entry.defaultChildren.push(scInfo);
-    }
-  }
-
-  if (def.preferredValues && def.preferredValues.length > 0) {
-    for (const pv of def.preferredValues) {
-      if (pv.type !== 'COMPONENT') continue;
-      const compNode2 = allCompKeys.get(pv.key);
-      if (!compNode2) continue;
-      const isSet = compNode2.parent && compNode2.parent.type === 'COMPONENT_SET';
-      const setNode = isSet ? compNode2.parent : compNode2;
-      const prefEntry = {
-        componentKey: pv.key,
-        componentName: compNode2.name,
-        componentId: compNode2.id,
-        componentSetId: isSet ? setNode.id : null,
-        isComponentSet: isSet,
-        variantAxes: {},
-        booleanDefs: {}
-      };
-      if (isSet && setNode.variantGroupProperties) {
-        for (const [k, v] of Object.entries(setNode.variantGroupProperties)) {
-          prefEntry.variantAxes[k] = v.values;
-        }
-      }
-      const prefPropDefs = setNode.componentPropertyDefinitions || {};
-      for (const [pk, pd] of Object.entries(prefPropDefs)) {
-        if (pd.type === 'BOOLEAN') prefEntry.booleanDefs[pk] = pd.defaultValue;
-      }
-      entry.preferredComponents.push(prefEntry);
-    }
-  }
-  slotContents.push(entry);
-}
-slotTestInst.remove();
-
-return {
-  componentName: node.name,
-  compSetNodeId: TARGET_NODE_ID,
-  isComponentSet,
-  variantAxes,
-  propertyDefs,
-  booleanDefs,
-  variantCount: variantChildren.length,
-  variants,
-  enrichedTree,
-  subComponents,
-  slotContents
-};
-```
-
-Save the returned JSON. The extraction returns:
-
-- **`componentName`**, **`compSetNodeId`**, **`isComponentSet`** — component identity
-- **`variantAxes`** — map of axis name → value array (e.g., `{ Size: ["Large", "Medium", "Small"] }`)
-- **`propertyDefs`** — all component property definitions with exact Figma keys (including `#nodeId` suffixes for booleans) needed for `setProperties()` when placing preview instances
-- **`booleanDefs`** — parent-level boolean properties and their defaults
-- **`variants`** — one per value of each dimension-affecting axis (Size, Density, Shape) at default values for other axes. Each has `name`, `dimensions` (collapsed `{ value, token, display }` tuples), `children`, and `layoutTree`
-- **`enrichedTree`** — full recursive tree from a fully-enabled test instance (all parent booleans `true`). Each node: name, type, visible, dimensions, children, typography, sub-component metadata. INSTANCE nodes at any depth include `mainComponentName` (the variant name, e.g., `"Size=12, Theme=Filled"`) and `parentSetName` (the component set name, e.g., `"checkmark"`) — use `parentSetName` as the icon/component identity.
-- **`subComponents`** — array with `name`, `mainComponentName`, `subCompSetId`, `subCompVariantAxes`, `booleanOverrides`, `dimensions`, `children`, `typography` per sub-component
-- **`slotContents`** — array of SLOT property entries. Each has `slotName`, `slotNodeType`, `preferredComponents` (resolved preferred instances with `componentKey`, `componentName`, `componentId`, `componentSetId`, `isComponentSet`, `variantAxes`, `booleanDefs`), `defaultChildren` (current default slot content), and `slotDimensions` (dimensional properties of the SLOT node itself). Empty array when the component has no SLOT properties.
-
-The instruction file (`agent-structure-instruction.md`) documents how to interpret the data shapes — collapsed dimensions, typography composites, display strings, and logical directions. Refer to it for row emission rules.
-
-**Response truncation:** The MCP tool may truncate responses exceeding ~20KB. If the returned JSON is missing expected fields (`subComponents`, `slotContents`, or later `variants` entries), run a targeted follow-up `use_figma` call that extracts only the missing fields (e.g., just `subComponents` and `slotContents` with their metadata, without the full recursive `children` and `dimensions` trees). Do not re-run the full extraction script — extract only what was lost.
-
-You will use `componentName`, `compSetNodeId`, `variantAxes`, `propertyDefs`, `booleanDefs`, `variants`, `enrichedTree`, `subComponents`, `slotContents`, and each variant's `layoutTree` in subsequent steps.
-
-**4c. Check variable modes:**
-- `figma_get_variables` — **Critical:** Check if any bound tokens have multiple mode values (e.g., Density: compact/default/spacious). Filter by token prefix to find relevant variables. If the extraction script found tokens in `boundVariables`, query those token names to discover multi-mode collections.
-
-**Scope constraint:** Only analyze the provided node and its children. Do not navigate to other pages or unrelated frames elsewhere in the Figma file.
-
-**4d. Cross-variant dimensional comparison** — Run this deterministic script via `figma_execute` to systematically compare dimensions across all size/variant values for every discovered sub-component, plus the root component itself. Replace `__NODE_ID__` and `__SUB_COMPONENTS_JSON__` (from the extraction's `subComponents` array) and `__BOOLEAN_DEFS_JSON__` (from `booleanDefs`):
-
-```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
-const SUB_COMPONENTS = __SUB_COMPONENTS_JSON__;
-const BOOLEAN_DEFS = __BOOLEAN_DEFS_JSON__;
-const VARIANT_AXES = __VARIANT_AXES_JSON__;
-
-function rv(v) { return Math.round(v * 10) / 10; }
-
-function makeDisplay(value, token) {
-  if (token) return token + ' (' + value + ')';
-  return String(value);
-}
-
-async function resolveBinding(node, prop) {
-  const bindings = node.boundVariables;
-  if (!bindings || !bindings[prop]) return null;
-  const binding = Array.isArray(bindings[prop]) ? bindings[prop][0] : bindings[prop];
-  if (!binding?.id) return null;
-  try {
-    const v = await figma.variables.getVariableByIdAsync(binding.id);
-    if (v) return v.name;
-  } catch {}
-  return null;
-}
-
-function collapsePadding(pT, pB, pS, pE, tT, tB, tS, tE) {
-  const vT = rv(pT || 0), vB = rv(pB || 0);
-  const vS = rv(pS || 0), vE = rv(pE || 0);
-  if (vT === vB && vS === vE && vT === vS && tT === tB && tS === tE && tT === tS) {
-    return { value: vT, token: tT || null, display: makeDisplay(vT, tT) };
-  }
-  if (vT === vB && vS === vE && tT === tB && tS === tE) {
-    return {
-      vertical: { value: vT, token: tT || null, display: makeDisplay(vT, tT) },
-      horizontal: { value: vS, token: tS || null, display: makeDisplay(vS, tS) }
-    };
-  }
-  return {
-    top: { value: vT, token: tT || null, display: makeDisplay(vT, tT) },
-    bottom: { value: vB, token: tB || null, display: makeDisplay(vB, tB) },
-    start: { value: vS, token: tS || null, display: makeDisplay(vS, tS) },
-    end: { value: vE, token: tE || null, display: makeDisplay(vE, tE) }
-  };
-}
-
-function collapseCornerRadius(tl, tr, bl, br, tTL, tTR, tBL, tBR) {
-  if (tl === tr && tr === bl && bl === br && tTL === tTR && tTR === tBL && tBL === tBR) {
-    return { value: tl, token: tTL || null, display: makeDisplay(tl, tTL) };
-  }
-  return {
-    topStart: { value: tl, token: tTL || null, display: makeDisplay(tl, tTL) },
-    topEnd: { value: tr, token: tTR || null, display: makeDisplay(tr, tTR) },
-    bottomStart: { value: bl, token: tBL || null, display: makeDisplay(bl, tBL) },
-    bottomEnd: { value: br, token: tBR || null, display: makeDisplay(br, tBR) }
-  };
-}
-
-async function measureNode(node) {
-  const m = {};
-  const isContainer = 'layoutMode' in node;
-  const universalProps = ['width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight'];
-  const containerProps = isContainer ? ['itemSpacing', 'counterAxisSpacing'] : [];
-  for (const p of [...universalProps, ...containerProps]) {
-    try {
-      const val = node[p];
-      if (val !== undefined && val !== null && val !== figma.mixed) {
-        const token = await resolveBinding(node, p);
-        const v = rv(val);
-        m[p] = { value: v, token: token || null, display: makeDisplay(v, token) };
-      }
-    } catch {}
-  }
-
-  if (isContainer) {
-    try {
-      const tPT = await resolveBinding(node, 'paddingTop');
-      const tPB = await resolveBinding(node, 'paddingBottom');
-      const tPS = await resolveBinding(node, 'paddingLeft');
-      const tPE = await resolveBinding(node, 'paddingRight');
-      if (node.paddingTop !== undefined || node.paddingBottom !== undefined || node.paddingLeft !== undefined || node.paddingRight !== undefined) {
-        m.padding = collapsePadding(node.paddingTop, node.paddingBottom, node.paddingLeft, node.paddingRight, tPT, tPB, tPS, tPE);
-      }
-    } catch {}
-  }
-
-  try {
-    if (node.cornerRadius !== undefined && node.cornerRadius !== null) {
-      if (node.cornerRadius === figma.mixed) {
-        const tTL = await resolveBinding(node, 'topLeftRadius');
-        const tTR = await resolveBinding(node, 'topRightRadius');
-        const tBL = await resolveBinding(node, 'bottomLeftRadius');
-        const tBR = await resolveBinding(node, 'bottomRightRadius');
-        m.cornerRadius = collapseCornerRadius(
-          rv(node.topLeftRadius || 0), rv(node.topRightRadius || 0),
-          rv(node.bottomLeftRadius || 0), rv(node.bottomRightRadius || 0),
-          tTL, tTR, tBL, tBR
-        );
-      } else {
-        const token = await resolveBinding(node, 'cornerRadius');
-        const v = rv(node.cornerRadius);
-        m.cornerRadius = { value: v, token: token || null, display: makeDisplay(v, token) };
-      }
-    }
-  } catch {}
-
-  try {
-    if (node.strokeWeight !== undefined && node.strokeWeight !== null) {
-      if (node.strokeWeight === figma.mixed) {
-        const sides = {};
-        for (const s of ['strokeTopWeight', 'strokeBottomWeight', 'strokeLeftWeight', 'strokeRightWeight']) {
-          try {
-            if (node[s] !== undefined) {
-              const logicalKey = s.replace('strokeTopWeight', 'top').replace('strokeBottomWeight', 'bottom').replace('strokeLeftWeight', 'start').replace('strokeRightWeight', 'end');
-              sides[logicalKey] = { value: rv(node[s]), token: null, display: String(rv(node[s])) };
-            }
-          } catch {}
-        }
-        m.strokeWeight = sides;
-      } else {
-        const token = await resolveBinding(node, 'strokeWeight');
-        const v = rv(node.strokeWeight);
-        m.strokeWeight = { value: v, token: token || null, display: makeDisplay(v, token) };
-      }
-    }
-  } catch {}
-
-  if (isContainer) {
-    try { if (node.layoutMode && node.layoutMode !== 'NONE') m.layoutMode = { value: node.layoutMode, token: null, display: node.layoutMode }; } catch {}
-    try { if (node.layoutSizingHorizontal) m.layoutSizingHorizontal = { value: node.layoutSizingHorizontal, token: null, display: node.layoutSizingHorizontal }; } catch {}
-    try { if (node.layoutSizingVertical) m.layoutSizingVertical = { value: node.layoutSizingVertical, token: null, display: node.layoutSizingVertical }; } catch {}
-  }
-
-  if (node.type === 'TEXT') {
-    if (node.textStyleId && typeof node.textStyleId === 'string' && node.textStyleId !== '') {
-      try {
-        const style = await figma.getStyleByIdAsync(node.textStyleId);
-        if (style) m.typography = { styleName: style.name };
-      } catch {}
-    } else {
-      const typo = {};
-      if (typeof node.fontSize === 'number') typo.fontSize = node.fontSize;
-      if (typeof node.fontName === 'object') typo.fontWeight = node.fontName.style;
-      if (node.lineHeight && typeof node.lineHeight === 'object' && node.lineHeight.unit !== 'AUTO') typo.lineHeight = node.lineHeight.value;
-      if (Object.keys(typo).length > 0) m.typography = typo;
-    }
-  }
-  return m;
-}
-
-async function measureChildren(container, enableBools) {
-  if (enableBools && Object.keys(enableBools).length > 0) {
-    try { container.setProperties(enableBools); } catch {}
-  }
-  const result = {};
-  for (const child of container.children) {
-    if (!child.visible && !enableBools) continue;
-    result[child.name] = await measureNode(child);
-    if ('children' in child && child.children.length > 0 && child.type !== 'INSTANCE') {
-      const nested = await measureChildren(child, null);
-      if (Object.keys(nested).length > 0) result[child.name + '.__children'] = nested;
-    }
-  }
-  return result;
-}
-
-async function loadAllFonts(rootNode) {
-  const textNodes = rootNode.findAll(n => n.type === 'TEXT');
-  const fontSet = new Set();
-  const fontsToLoad = [];
-  for (const tn of textNodes) {
-    try {
-      const fn = tn.fontName;
-      if (fn && fn !== figma.mixed && fn.family) {
-        const key = fn.family + '|' + fn.style;
-        if (!fontSet.has(key)) { fontSet.add(key); fontsToLoad.push(fn); }
-      }
-    } catch {}
-  }
-  await Promise.all(fontsToLoad.map(f => figma.loadFontAsync(f).catch(() => {})));
-}
-
-const compSet = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!compSet) return { error: 'Node not found' };
-const isCS = compSet.type === 'COMPONENT_SET';
-const allVariants = isCS ? compSet.children : [compSet];
-const axes = {};
-if (isCS && compSet.variantGroupProperties) {
-  for (const [k, v] of Object.entries(compSet.variantGroupProperties)) axes[k] = v.values;
-}
-
-const sizeAxis = Object.keys(axes).find(a => /size/i.test(a));
-const stateAxis = Object.keys(axes).find(a => /state/i.test(a));
-
-const defaultVariant = isCS ? (compSet.defaultVariant || compSet.children[0]) : compSet;
-const defaultVProps = isCS ? (defaultVariant.variantProperties || {}) : {};
-const defaultValues = {};
-for (const [axis, vals] of Object.entries(axes)) {
-  defaultValues[axis] = defaultVProps[axis] || vals[0];
-}
-
-const rootDimensions = {};
-const subComponentDimensions = {};
-const slotContentDimensions = {};
-const SLOT_CONTENTS = __SLOT_CONTENTS_JSON__;
-
-const sizeValues = sizeAxis ? axes[sizeAxis] : [null];
-for (const sizeVal of sizeValues) {
-  const targetProps = { ...defaultValues };
-  if (sizeAxis && sizeVal) targetProps[sizeAxis] = sizeVal;
-
-  const variant = isCS ? allVariants.find(v => {
-    const vp = v.variantProperties || {};
-    return Object.entries(targetProps).every(([k, val]) => vp[k] === val);
-  }) : allVariants[0];
-  if (!variant) continue;
-
-  const label = sizeVal || variant.name;
-  rootDimensions[label] = await measureNode(variant);
-
-  const inst = variant.createInstance();
-  const enableAll = {};
-  for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
-  try { inst.setProperties(enableAll); } catch {}
-
-  for (const sc of SUB_COMPONENTS) {
-    const subInst = inst.findOne(n => n.name === sc.name && n.type === 'INSTANCE');
-    if (subInst) {
-      if (!subComponentDimensions[sc.name]) subComponentDimensions[sc.name] = {};
-      const boolOverrides = {};
-      for (const key of Object.keys(sc.booleanOverrides || {})) boolOverrides[key] = true;
-      subComponentDimensions[sc.name][label] = {
-        self: await measureNode(subInst),
-        children: await measureChildren(subInst, boolOverrides)
-      };
-    }
-  }
-
-  for (const slot of SLOT_CONTENTS) {
-    if (!slot.preferredComponents || slot.preferredComponents.length === 0) continue;
-    if (!slotContentDimensions[slot.slotName]) slotContentDimensions[slot.slotName] = {};
-    const slotNode = inst.findOne(n => n.type === 'SLOT' && n.name === slot.slotName);
-    if (!slotNode) continue;
-    for (const pref of slot.preferredComponents) {
-      if (!slotContentDimensions[slot.slotName][pref.componentName]) {
-        slotContentDimensions[slot.slotName][pref.componentName] = {};
-      }
-      const prefComp = await figma.getNodeByIdAsync(pref.componentId);
-      if (!prefComp || prefComp.type !== 'COMPONENT') continue;
-      const prefInst = prefComp.createInstance();
-      while (slotNode.children.length > 0) slotNode.children[0].remove();
-      slotNode.appendChild(prefInst);
-      await loadAllFonts(inst);
-      slotContentDimensions[slot.slotName][pref.componentName][label] = {
-        self: await measureNode(prefInst),
-        slotContext: await measureNode(slotNode)
-      };
-    }
-  }
-
-  inst.remove();
-}
-
-let stateComparison = null;
-if (stateAxis && axes[stateAxis].length > 1) {
-  stateComparison = {};
-  for (const stateVal of axes[stateAxis]) {
-    const targetProps = { ...defaultValues, [stateAxis]: stateVal };
-    const variant = allVariants.find(v => {
-      const vp = v.variantProperties || {};
-      return Object.entries(targetProps).every(([k, val]) => vp[k] === val);
-    });
-    if (variant) stateComparison[stateVal] = await measureNode(variant);
-  }
-}
-
-return {
-  rootDimensions,
-  subComponentDimensions,
-  slotContentDimensions,
-  stateComparison,
-  sizeAxis: sizeAxis || null,
-  stateAxis: stateAxis || null
-};
-```
-
-Save the returned JSON. Replace `__VARIANT_AXES_JSON__` with the `variantAxes` object from Step 4b extraction. Replace `__SLOT_CONTENTS_JSON__` with the `slotContents` array from Step 4b extraction. This script provides:
-- **`rootDimensions`** — keyed by size/variant label, full measurements of the root component at each size (at default state and default values for all other axes). Uses the same representative variant strategy as Step 4b — only one variant per size value, not all permutations.
-- **`subComponentDimensions`** — keyed by sub-component name, then by size label, with `self` (the sub-component's own measurements) and `children` (its internal children's measurements, with booleans enabled). Every sub-component discovered in Step 4b is measured across all sizes.
-- **`slotContentDimensions`** — keyed by slot name → preferred component name → size label, with `self` (the preferred component's measurements after being placed inside the slot) and `slotContext` (the SLOT node's own measurements after content insertion and auto-layout reflow). Only populated when `slotContents` contains entries with `preferredComponents`. **Use `self` only to identify placement-specific deltas from the preferred component's standalone defaults. Do not treat `self` as a second full structure spec for the preferred component. Use `slotContext` for hosting-container properties.**
-- **`stateComparison`** — measurements of the root at the default size across all state values. Use this to detect state-conditional properties (e.g., border appears on focus).
-- All measurements use the same collapsed dimensional model as Step 4b: `padding` as uniform / `{ vertical, horizontal }` / `{ top, bottom, start, end }`, collapsed `cornerRadius`, collapsed `strokeWeight`, and `typography` as composite `{ styleName }` or `{ fontSize, fontWeight, ... }`.
-
-**4e. Non-dimensional axis diff** — Run this script via `figma_execute` to measure root and direct children properties across every variant axis NOT already covered by Steps 4b–4d (i.e., not size/density/shape). This is a data-gathering step only — classification happens in Step 6. Replace `__NODE_ID__`, `__VARIANT_AXES_JSON__`, `__BOOLEAN_DEFS_JSON__`, and `__DIMENSION_AXES_LIST__` (a JSON array of axis names already handled, e.g., `["size"]`):
-
-```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
-const VARIANT_AXES = __VARIANT_AXES_JSON__;
-const BOOLEAN_DEFS = __BOOLEAN_DEFS_JSON__;
-const DIMENSION_AXES = __DIMENSION_AXES_LIST__;
-
-function rv(v) { return Math.round(v * 10) / 10; }
-
-function md(value, token) {
-  if (token) return token + ' (' + value + ')';
-  return String(value);
-}
-
-async function resolveBinding(node, prop) {
-  try {
-    const bindings = node.boundVariables;
-    if (!bindings || !bindings[prop]) return null;
-    const binding = Array.isArray(bindings[prop]) ? bindings[prop][0] : bindings[prop];
-    if (!binding?.id) return null;
-    const v = await figma.variables.getVariableByIdAsync(binding.id);
-    if (v) return v.name;
-  } catch {}
-  return null;
-}
-
-async function measureNode(node) {
-  const m = {};
-  const isContainer = 'layoutMode' in node;
-  const props = ['minWidth', 'maxWidth', 'minHeight', 'maxHeight'];
-  if (isContainer) props.push('itemSpacing');
-  for (const p of props) {
-    try {
-      const val = node[p];
-      if (val !== undefined && val !== null && val !== figma.mixed) {
-        const token = await resolveBinding(node, p);
-        m[p] = { value: rv(val), token: token || null, display: md(rv(val), token) };
-      }
-    } catch {}
-  }
-  if (isContainer) {
-    try {
-      const tPS = await resolveBinding(node, 'paddingLeft');
-      const tPE = await resolveBinding(node, 'paddingRight');
-      const tPT = await resolveBinding(node, 'paddingTop');
-      const tPB = await resolveBinding(node, 'paddingBottom');
-      m.paddingTop = { value: rv(node.paddingTop || 0), token: tPT || null };
-      m.paddingBottom = { value: rv(node.paddingBottom || 0), token: tPB || null };
-      m.paddingStart = { value: rv(node.paddingLeft || 0), token: tPS || null };
-      m.paddingEnd = { value: rv(node.paddingRight || 0), token: tPE || null };
-    } catch {}
-    try { m.layoutMode = node.layoutMode; } catch {}
-    try { m.layoutSizingHorizontal = node.layoutSizingHorizontal; } catch {}
-    try { m.layoutSizingVertical = node.layoutSizingVertical; } catch {}
-  }
-  try {
-    if ('cornerRadius' in node && node.cornerRadius !== undefined && node.cornerRadius !== figma.mixed) {
-      m.cornerRadius = { value: rv(node.cornerRadius) };
-    }
-  } catch {}
-  try {
-    if ('strokeWeight' in node && node.strokes && node.strokes.length > 0) {
-      m.strokeWeight = { value: rv(node.strokeWeight) };
-    } else if ('strokeWeight' in node) {
-      m.strokeWeight = { value: 0 };
-    }
-  } catch {}
-  return m;
-}
-
-async function measureChildSummary(container) {
-  const children = [];
-  if (!('children' in container)) return children;
-  for (const child of container.children) {
-    const entry = { name: child.name, type: child.type, visible: child.visible };
-    entry.dims = await measureNode(child);
-    children.push(entry);
-  }
-  return children;
-}
-
-const compSet = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!compSet) return { error: 'Node not found' };
-
-let _p = compSet; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
-if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
-
-const isCS = compSet.type === 'COMPONENT_SET';
-const allVariants = isCS ? compSet.children : [compSet];
-
-const defaultVariant = isCS ? (compSet.defaultVariant || compSet.children[0]) : compSet;
-const defaultVProps = isCS ? (defaultVariant.variantProperties || {}) : {};
-const defaultValues = {};
-for (const [axis, vals] of Object.entries(VARIANT_AXES)) {
-  defaultValues[axis] = defaultVProps[axis] || vals[0];
-}
-
-const axisDiffs = {};
-const axesToCheck = Object.keys(VARIANT_AXES).filter(a => !DIMENSION_AXES.includes(a));
-
-for (const axis of axesToCheck) {
-  axisDiffs[axis] = {};
-  for (const val of VARIANT_AXES[axis]) {
-    const targetProps = { ...defaultValues, [axis]: val };
-    const variant = allVariants.find(v => {
-      const vp = v.variantProperties || {};
-      return Object.entries(targetProps).every(([k, tv]) => vp[k] === tv);
-    });
-    if (!variant) { axisDiffs[axis][val] = null; continue; }
-
-    const inst = variant.createInstance();
-    const enableAll = {};
-    for (const key of Object.keys(BOOLEAN_DEFS)) enableAll[key] = true;
-    try { inst.setProperties(enableAll); } catch {}
-
-    axisDiffs[axis][val] = {
-      root: await measureNode(inst),
-      children: await measureChildSummary(inst)
-    };
-    inst.remove();
-  }
-}
-
-return { axisDiffs };
-```
-
-Save the returned `axisDiffs`. This provides raw measurements for every non-dimensional axis value — root node properties and direct children with their names, types, visibility, and key dimensions. **Do not classify axes at this step.** The AI interpretation layer in Step 6 will reason about the diffs to determine which axes are structural, property-variant, or visual-only.
-
-**Targeted follow-up for structural axes:** After Step 6 classifies an axis as structural (children differ across values), you must re-run the cross-variant dimensional comparison (Step 4d script) once for each structurally distinct configuration. For example, if `layout` is structural with values `label` and `icon-only`, run the Step 4d script twice — once with `layout=label` pinned and once with `layout=icon-only` pinned — varying the size axis in each run. This gives you complete dimensional data for each configuration across all sizes, which feeds into separate sections in Step 7.
+> The legacy "navigate + screenshot + run the `extractDimensions`/`extractChildren` extraction script + cross-variant comparison + non-dimensional axis diff" flow (old Steps 4a–4e) has been **removed**. Do not reintroduce it. The `.md` + `render-meta` are the complete input.
 
 ### Step 5: Navigate to Destination
 
@@ -985,187 +162,38 @@ If the user provided a separate destination file URL:
 
 If no destination was provided, stay in the current file.
 
-### Step 6: AI Interpretation Layer
+### Step 6: Re-derive each section's `sectionType` (light reasoning, no live reads)
 
-This is the core quality step. You have complete, structured data from Steps 4b-4e. Instead of writing `figma_execute` queries, you focus on high-value reasoning tasks that directly improve spec quality for engineers.
+The sections, columns, rows, and notes are already authored in the `.md` and parsed in Step 4 — you neither add nor drop sections, and you do **not** re-plan them. The only thing the Step 11a renderer additionally needs is each section's **`sectionType`**, which selects the preview-parameter row in Step 11a's decision table. Re-derive it cheaply from the parsed columns + `render-meta` — **no Figma reads**.
 
-**Input:** The extraction data (4b), cross-variant dimensional comparison (4d), variable mode data (4c), and non-dimensional axis diffs (4e).
+For each `SECTIONS` entry, match in this order and attach the resulting `sectionType` (plus the recorded metadata each type needs in Step 11a):
 
-**A. Build the section plan:**
+- **`composition`** — the first section whose first column header is `Composition` (it maps parent sizes → sub-component variants). No extra metadata.
+- **`subComponent`** — the `sectionName` matches a `render-meta.subComponents[].name` (or its `mainComponentName`). Record that entry's `subCompSetId`, `subCompVariantAxes`, `subCompVariantAxesDefaults`, and `booleanOverrides`.
+- **`slotContent`** — the `sectionName` matches the `"{slotName} — {componentName}"` pattern, where `{slotName}` is a `render-meta.slotContents[].slotName` and `{componentName}` is one of that slot's `preferredComponents[].componentName`. Record the preferred component's `componentId`, `componentSetId`, `variantAxes`, and `booleanDefs`.
+- **`stateConditional`** — the `### State deltas` section, or any section whose value-columns are state names (matching the `state` axis in `render-meta.variantAxes`, or runtime conditions like `focused` / `error`).
+- **`boolean-toggled`** — a standalone component (no dimension-affecting `render-meta.variantAxes`) whose value-columns are boolean-combination labels (e.g. `Default`, `With subtext`). The relevant booleans are described by `render-meta.booleanDefs[]`.
+- **`variant`** (default) — the section's value-columns (between `Spec` and `Notes`) match the options of a `render-meta.variantAxes` axis whose name matches `/size/i`, `/density/i`, or `/shape/i`. Record which axis it is (`VARIANT_AXIS`) and whether it is size / density / shape (this picks the Size/Density/Shape row in Step 11a).
 
-Apply these deterministic rules to the extraction and cross-variant data, then validate and adjust the result using your judgment about the component's actual structure.
+This is the same decision the old AI interpretation layer produced, but it reads axes, sub-components, and slots from `render-meta` instead of a live walk, and the section list is fixed by the `.md`. Do not re-measure, re-classify axes from a live walk, or run any targeted re-extraction (the old Step 6b is **deleted**).
 
-**Rules (apply in order):**
+### Step 7: Audit the assembled render inputs
 
-1. **Variant axes with purely numeric differences → columns.** For each variant axis from `variantAxes`, compare `rootDimensions` across values. If all values have the same set of properties and differ only numerically, make this axis a set of columns (e.g., Size → "Large", "Medium", "Small", "XSmall" columns).
+Before rendering, verify the inputs you built from the `.md`:
+- Every `SECTIONS` entry has a `columns` array whose first cell is `Spec` (or `Composition`) and last cell is `Notes`, and every row's `values` length equals `columns.length - 2`.
+- Every row's `display` cells are copied verbatim from the `.md` (no reformatting). Rows tagged `provenance: "not-measured"` have `—` in every value cell; rows tagged `inferred` keep their `[inferred via <token>]` reasoning in `notes`.
+- Every section resolved a `sectionType` in Step 6. Sub-component / slot-content sections resolved their `render-meta` metadata (`subCompSetId` / preferred `componentId`).
+- `COMP_SET_ID`, `BOOLEAN_DEFS`, `VARIANT_AXES`, `SUB_COMPONENTS`, and `SLOT_CONTENTS` all come from `render-meta` — not from any live read.
+- The Typography index was **not** re-emitted as its own section, and the State-deltas rows were deduped against the dimensional sections (no property emitted twice).
+- You did NOT run an extraction/tree-walk (see Step 0 FORBIDDEN).
 
-1b. **Variant axes with identical values → still columns.** When the extraction returns multiple variants along an axis but all dimensional values are identical, use those variants as columns anyway. Identical values across columns communicate intentional structural consistency to engineers. Do not collapse to a single "Default" column. This applies especially when no dimension-affecting axes (size/density/shape) exist and the extraction falls back to the component's primary functional axis (e.g., checked/unchecked/indeterminate, expanded/collapsed, on/off).
-
-1c. **Reason about non-dimensional axis diffs.** Using the raw `axisDiffs` from Step 4e, compare measurements across each axis and classify:
-
-   - **Structural axis** (children differ — different names, count, or visibility across values): Each structurally distinct configuration needs its own full extraction and section(s). Re-run the Step 4d cross-variant script scoped to each configuration (see Step 4e follow-up instructions), then create separate sections for each. If the component also has a size axis, each configuration is documented across all sizes. Example: `layout=icon-only` has different children than `layout=label` — extract dimensions for both configurations and create separate sections.
-
-   - **Property-variant axis** (same children, but dimensional properties differ — strokeWeight appears/disappears, cornerRadius changes, padding differs, sizing mode changes): Create a state-conditional section documenting which values have which property differences. Group values with identical properties into columns. Example: `variant=secondary` adds `strokeWeight=1` while `primary`/`ghost`/`subtle` have none — one section with columns showing the difference.
-
-   - **Visual-only axis** (same children, same dimensional properties — only fills, effects, opacity change): Skip. No section needed.
-
-   Use judgment for edge cases: a 0.5px rounding difference is noise, but `strokeWeight` going from 0 to 1 is meaningful. If multiple values along an axis share the same diff (e.g., `secondary` and `backgroundSafe` both add the same border), group them as columns rather than creating separate sections.
-
-   **Dedup with `stateComparison`:** If an axis is already covered by `stateComparison` (Step 4d — axes matching `/state/i`), prefer `stateComparison` for Rule 4 and skip creating a duplicate section from `axisDiffs` for that axis. However, still check the `axisDiffs` children data — if children differ across that axis (structural change), escalate it to a structural axis, which supersedes the `stateComparison` section.
-
-2. **Treat extraction outputs as candidates, not final section types.** `subComponents`, `slotContents`, `enrichedTree`, and `layoutTree` are discovery inputs for planning. Do **not** assume that an item belongs to a final section type just because it first appeared in one extraction array.
-
-2a. **Resolve ownership before creating any sections.** For each candidate instance discovered in `subComponents`, `slotContents`, or the relevant structural zones of `enrichedTree`, classify it once onto exactly one path: `subComponent`, `slotContent`, or composition/root-only.
-
-2b. **Ownership rule before slot classification.** If an instance is a **parent-owned structural role** in the component architecture, classify it as a `subComponent` even if it is placed via a slot or slot-like composition. If an instance is **library-owned** or generic **preferred slot content**, keep it on the `slotContent` path. Treat file-locality as a supporting signal only — ownership and engineering responsibility win over whether the instance is defined in the same file.
-
-2c. **Deduplicate overlapping candidates.** If the same concept appears in both `subComponents` and `slotContents.preferredComponents`, resolve it once using Rule 2b and emit **at most one** section path for it. Do not generate both a `subComponent` section and a `slotContent` section for the same owned role.
-
-2d. **Sub-components → separate sections.** After ownership resolution, each remaining `subComponent` gets its own section. The section's columns match the parent's size axis (or the sub-component's own size axis if it has one). Use `subComponentDimensions[name]` for the row data.
-
-3. **2+ sub-components with own size variants → composition section.** If `subComponents` has 2+ entries where `subCompVariantAxes` contains a size-like axis, create a composition section as the first section. Map parent size → sub-component variant for each sub-component.
-
-4. **State axis with new properties → state-conditional section.** Compare `stateComparison` entries: if any state introduces a property not present in the default state (especially `strokeWeight` appearing or changing), create a state-conditional section.
-
-5. **Layout tree for container hierarchy.** Use the `layoutTree` from the default variant to identify which containers are structurally significant (have their own padding/spacing). Containers that are pass-through wrappers (no padding, no spacing, single child) can be omitted.
-
-6. **Slot preferred content → `slotContent` sections.** For each entry in `slotContents` that has `preferredComponents`, create one section per preferred component **only when the preferred instance is still classified as `slotContent` after Rules 2a-2c**. The section name follows the pattern `"{slotName} — {componentName}"` (e.g., "Leading content — Checkbox"). Columns match the parent's size axis. Data source is `slotContentDimensions.{slotName}.{componentName}`. Section description notes the slot relationship: `"Dimensional properties when {componentName} is placed in the {slotName} slot. See {componentName} spec for component internals."` Place these sections after regular sub-component sections but before state-conditional sections. **These sections document only hosting context and slot-imposed deltas. Do not emit the preferred component's own internal structure from `self`. Prefer container rows such as `Container`, contextual padding, contextual widthMode/heightMode, and a reference row like `Text button instance` / `Checkbox instance`.**
-
-**Produce a `sectionPlan` array** with this shape:
-```
-sectionPlan = [
-  {
-    sectionType: "composition" | "variant" | "subComponent" | "stateConditional" | "slotContent",
-    sectionName: string,
-    sectionDescription: string | null,
-    columns: string[],           // e.g., ["Spec", "Large", "Medium", "Small", "Notes"]
-    subCompSetId: string | null, // for subComponent sections
-    booleanOverrides: object,    // for subComponent sections
-    variantAxis: string | null,  // axis name for variant sections
-    dataSource: string,          // "rootDimensions" | "subComponentDimensions.Name" | "stateComparison" | "slotContentDimensions.SlotName.CompName"
-    preferredComponentId: string | null,      // for slotContent sections — the preferred component's own component set ID (or component ID if not in a set)
-    preferredComponentSetId: string | null,    // for slotContent sections — the preferred component's component set ID (for preview sourcing)
-    slotName: string | null                   // for slotContent sections — the SLOT property name
-  },
-  ...
-]
-```
-
-**Ordering:** Composition section first (if any), then root/variant sections, then sub-component sections in the order they appear in the enriched tree (visual order: leading → middle → trailing), then slot content sections (grouped by slot: leading → trailing, one per preferred component), then state-conditional sections last.
-
-**Then validate the plan against the full data:**
-- Does every auto-layout container in the extraction have its padding and spacing covered by a section?
-- Does every instance that remains classified as a `subComponent` after Rules 2a-2c have a section?
-- Are there dimensional properties in the extraction that are not included in any section (and should they be)?
-- Should any sections be merged, split, or reordered based on the component's actual structure?
-- For behavior/configuration variant axes (e.g., Static vs Interactive): use the default configuration for the preview. If border/stroke differs between configurations, add a row — don't create a separate section unless the property sets are fundamentally different.
-- For `slotContent` sections: are the rows limited to hosting context and placement-specific deltas, with no duplicated internals from the preferred component's own spec?
-- If an instance appears in or near a slot, was it classified on the correct path first (`subComponent` for parent-owned structural roles, `slotContent` for library/preferred content)?
-- If the same instance surfaced through multiple discovery paths, was it emitted on exactly one section path after ownership resolution?
-
-Produce the final `sectionPlan` with any adjustments.
-
-**B. Write design-intent notes:**
-
-For each property row you will generate, write notes that answer **"why this value?"** not just **"what is this property?"**. You have full dimensional data across all variants and sub-components — use it.
-
-| Instead of this | Write this |
-|---|---|
-| "Tap target" | "Meets WCAG 2.5.8 minimum touch target with 12 optical margin" |
-| "Inset from edges" | "Accommodates multi-line secondary text at spacious density" |
-| "Pill shape" | "Uses half of minHeight — pill shape scales with container height" |
-| "Icon size" | "Matches the platform icon grid used by the system" |
-| "Gap between icon and label" | "Scales with size axis: 4→6→8→8 maintains optical balance at each size" |
-
-Use the cross-variant data to identify scaling patterns and explain them in notes.
-
-**C. Cross-section pattern recognition:**
-
-After reviewing all sections together, identify and document:
-- **General notes** describing system-wide patterns: e.g., "All sub-components share the `spacing-inset-*` token family for horizontal padding, scaling from 12 (compact) to 20 (spacious)"
-- **Consistency observations** in section descriptions: e.g., "Leading and trailing content slots have identical minWidth and alignment — designed as symmetrical containers"
-- **Cross-references between sections** when one section's values explain another's: e.g., "Composition section shows Label uses `small` variant at XSmall parent size — this is why the Label section's XSmall column has different padding than other sizes"
-
-These observations go into `generalNotes` and `sectionDescription` fields.
-
-**D. Anomaly detection:**
-
-Before generating structured data, scan the extraction and cross-variant data for:
-- **Scaling inconsistencies:** A sub-component whose minHeight doesn't scale with the parent's size axis — intentional or a design bug? Flag in notes.
-- **Token misconfiguration:** A token binding that resolves to the same value across all density modes — the token exists but doesn't differentiate. Note it.
-- **Asymmetric padding without explanation:** paddingStart=16, paddingEnd=12 — optical correction or mistake? If intentional, the note should explain why.
-- **Missing token bindings:** A hardcoded value surrounded by token-bound siblings — was the binding missed, or is it intentionally hardcoded? Flag for engineering awareness.
-- **Stroke/border state changes:** Compare `stateComparison` data — does a border appear, disappear, or change weight between states? Flag as a state-conditional section candidate if not already in the plan.
-
-Add anomaly notes to the relevant row's `notes` field or to `generalNotes` for component-wide issues.
-
-**E. Completeness judgment:**
-
-Before proceeding, verify:
-- Does every auto-layout container in the extraction have its padding and spacing documented in a section row? **Verification procedure:** For each sub-component section, walk `subComponentDimensions[name][size].children` — including all nested `__children` entries. Every entry with non-zero `padding` (uniform, symmetric, or per-side) is an auto-layout container that needs a corresponding group with its own rows. Watch for content areas (e.g., `leadingContent`, `trailingContent`) that have zero padding themselves but contain child wrapper frames (e.g., `icon`, `label`, `clear action`) each with their own padding — each wrapper must be its own group, not collapsed into a note on the parent. When `enrichedTree` is available (not truncated), cross-check it recursively for the same pattern.
-- Does every instance that remains classified as a `subComponent` after Rules 2a-2c have its own section?
-- Are there dimensional properties present in `rootDimensions` or `subComponentDimensions` that were not included in any row?
-- For composition sections: does every sub-component's size mapping cover all parent sizes?
-- Are typography styles documented for every TEXT node the section actually owns? Do **not** satisfy this by copying preferred slot children's typography into `slotContent` sections when that typography belongs to the preferred component's own spec.
-
-If gaps exist that cannot be filled from the extraction data, add a note in `generalNotes`: e.g., "Trailing content slot dimensions not documented — slot was empty in all inspected variants."
-
-The instruction file (`agent-structure-instruction.md`, "Interpretation Quality Guidance" section) contains additional detail and examples for each of these steps.
-
-### Step 6b: Targeted Extractions for Structural Axes
-
-If Rule 1c classified any axis as structural (children differ across values), run the targeted follow-up extractions now. For each structurally distinct configuration, re-run the Step 4d cross-variant script with that configuration pinned (e.g., `layout=icon-only` pinned while varying the size axis). Store the results alongside the original `rootDimensions` / `subComponentDimensions`, keyed by configuration (e.g., `rootDimensions_iconOnly`, `subComponentDimensions_iconOnly`). This data feeds into Step 7 for generating separate sections per structural configuration.
-
-If no structural axes were identified, skip this step.
-
-### Step 7: Generate Structured Data
-
-Using the section plan from Step 6, the complete dimensional data from Steps 4b-4e (including any targeted structural-axis extractions from Step 6b), build the structured data object.
-
-Follow the schema in the instruction file:
-- `componentName`: string
-- `generalNotes`: string (optional) — include cross-section patterns and component-wide anomalies from Step 6
-- `sections`: array, each with:
-  - `sectionName`: string
-  - `sectionDescription`: string (optional) — include structural rationale from Step 6, not generic labels
-  - `columns`: string[] (first is always "Spec" or "Composition", last is always "Notes")
-  - `rows`: array, each with `spec`, `values` (array matching columns.length - 2), `notes` (design-intent from Step 6), optional `isSubProperty`, `isLastInGroup`
-
-**Populating rows from dimensional data:**
-
-For each section in the plan:
-- Look up the `dataSource` to find the right dimensional data object (`rootDimensions`, `subComponentDimensions.Name`, `slotContentDimensions.SlotName.CompName`, or `stateComparison`).
-- For each column value (e.g., "Large", "Medium"), read the measurements at that key.
-- Use the `display` field directly from the dimensional data as the cell value — this already handles `"token-name (value)"` vs `"value"` formatting.
-- For collapsed padding: if `padding` is a single value, emit one `padding` row. If `{ vertical, horizontal }`, emit `verticalPadding` and `horizontalPadding` rows. If `{ top, bottom, start, end }`, emit individual `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` rows.
-- For collapsed cornerRadius: if uniform, emit one `cornerRadius` row. If per-corner, emit `cornerRadiusTopStart`, `cornerRadiusTopEnd`, etc.
-- For typography: if `{ styleName }`, emit one `textStyle` row with the style name. If inline properties, emit `fontSize`, `fontWeight`, `lineHeight` rows.
-
-**Override for `slotContent` sections:**
-- Treat `slotContext` as the primary source for hosting-container rows.
-- Use `self` only for values that are **different from the preferred component's standalone defaults because of slot placement**.
-- Do **not** emit a full row set from `self`. Skip the preferred component's own internal padding, cornerRadius, borderWidth, icon sizes, internal spacing, and typography when those belong to the preferred component's own spec.
-- Prefer a structure like `Container` group rows for hosting context, followed by a reference row such as `Text button instance` / `Checkbox instance` with notes like `"See Button component API"` or `"See Checkbox spec for internals"`.
-- If no meaningful `self` deltas exist, emit only hosting-container rows and the reference row.
-
-Ensure:
-- First column is always "Spec" (or "Composition" for composition sections), last is always "Notes"
-- `values` array length matches `columns.length - 2`
-- Use `isSubProperty: true` for child properties
-- Notes contain design-intent reasoning from Step 6, not generic descriptions
-
-### Step 8: Audit
-
-Re-read the instruction file, focusing on:
-- **Common Mistakes** section
-- **Do NOT** section
-- **Property naming** (camelCase, no platform units)
-
-Check your output against each rule. Fix any violations.
+To recall a row-emission convention (collapsed padding → `paddingTop`/`paddingBottom` rows, logical-direction naming, the annotation allowlist vocabulary), re-read `agent-structure-instruction.md` (**Common Mistakes** / **Do NOT** / **Property naming** sections). Fix any mismatch by re-parsing the `.md` — never by re-extracting from Figma.
 
 Explicitly audit:
-- If a section description says `See X spec`, no table rows may restate X's own internal structure.
+- If a section description says `See X spec`, no table rows restate X's own internal structure (the `.md` already enforces this for `slotContent` sections).
 - If a section is `slotContent`, confirm the table documents hosting context and placement-specific deltas only.
+
+There is no Step 8 — the structured data (sections, columns, rows, notes, provenance) is already authored in the `.md` and assembled in Step 4. Do not re-generate it or re-measure dimensions.
 
 ### Step 9: Import and Detach Template
 
@@ -1211,11 +239,11 @@ figma.viewport.scrollAndZoomIntoView([frame]);
 return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
 ```
 
-Replace `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL (same as `TARGET_NODE_ID` from Step 4b).
+Replace `__COMPONENT_NODE_ID__` with `COMP_SET_ID` = `render-meta.component.compSetNodeId` (from the `.md` parsed in Step 0).
 
 Save the returned `frameId` — you need it for all subsequent steps.
 
-**Cross-file note:** If the component is in a different file than the destination, the extraction script (Step 4b) must run in the component's file before navigating to the destination (Step 5). The template import above uses `importComponentByKeyAsync` which works across files.
+**Cross-file note:** All structural facts come from the local component `.md` (Step 0), so nothing needs to run in the component's file before navigating to the destination. The template import above uses `importComponentByKeyAsync` which works across files, and the preview scripts (Step 11c) resolve `COMP_SET_ID` / preferred components by node id via `getNodeByIdAsync`.
 
 ### Step 10: Fill Header Fields
 
@@ -1271,19 +299,19 @@ Before rendering, determine the preview configuration for the current section. T
 
 | Section type | `SUB_COMP_SET_ID` | `VARIANT_AXIS` | `COLUMN_VALUES` | `PROPERTY_OVERRIDES` | `SUB_COMP_OVERRIDES` | `SLOT_POPULATION` |
 |---|---|---|---|---|---|---|
-| **Size/variant** (columns are size names like Large, Medium, Small) | `''` | The axis name (e.g., `"Size"`) | Size names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` | `null` |
-| **Density** (columns are density modes from variable collections) | `''` | `''` | Mode names (e.g., `["Compact", "Default", "Spacious"]`) | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` | `null` |
-| **Shape** (columns are shape variants) | `''` | The axis name (e.g., `"Shape"`) | Shape names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible in the preview | `[]` | `null` |
-| **Sub-component** (columns are size names showing a specific child) | The sub-component's own component set ID (from `subComponents[].subCompSetId` in Step 4b extraction) | The sub-component's size axis name (from `subComponents[].subCompVariantAxes`) | Size names from the sub-component's own size axis | `[]` | Boolean properties to enable on each sub-component instance so all internal children are visible (from `subComponents[].booleanOverrides` in Step 4b — set all values to `true`) | `null` |
+| **Size/variant** (columns are size names like Large, Medium, Small) | `''` | The axis name (e.g., `"Size"`) | Size names from the axis | Enable all parent-level booleans from `BOOLEAN_DEFS` (`render-meta.booleanDefs`) to `true` so all documented children are visible in the preview | `[]` | `null` |
+| **Density** (columns are density modes from variable collections) | `''` | `''` | Mode names (e.g., `["Compact", "Default", "Spacious"]`) | Enable all parent-level booleans from `BOOLEAN_DEFS` (`render-meta.booleanDefs`) to `true` so all documented children are visible in the preview | `[]` | `null` |
+| **Shape** (columns are shape variants) | `''` | The axis name (e.g., `"Shape"`) | Shape names from the axis | Enable all parent-level booleans from `BOOLEAN_DEFS` (`render-meta.booleanDefs`) to `true` so all documented children are visible in the preview | `[]` | `null` |
+| **Sub-component** (columns are size names showing a specific child) | The sub-component's own component set ID (from `render-meta.subComponents[].subCompSetId`, recorded in Step 6) | The sub-component's size axis name (from `render-meta.subComponents[].subCompVariantAxes`) | Size names from the sub-component's own size axis | `[]` | Boolean properties to enable on each sub-component instance so all internal children are visible (from `render-meta.subComponents[].booleanOverrides` — set all values to `true`) | `null` |
 | **Composition** (columns show sub-component variant mappings) | `''` | `''` | Size names | Configure each column's specific property combination | `[]` | `null` |
-| **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | Enable all parent-level booleans from `booleanDefs` to `true` so all documented children are visible. Do **not** vary the configuration axis — use the default configuration | `[]` | `null` |
-| **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Enable all parent-level booleans from `booleanDefs` to `true`, then for each column also set the state variant property for that column | `[]` | `null` |
-| **Slot content** (columns are parent size names showing a preferred component placed in the slot) | `''` (preview is sourced from the parent — preferred is nested via `SLOT_POPULATION`) | The parent's size axis name (so the parent renders at each column's size) | Size names from the **parent's** size axis | Enable all parent-level booleans from `booleanDefs` to `true` (so the slot is visible) | `[]` | `{ slotName: '<from sectionPlan>', preferredComponentId: '<from sectionPlan>', preferredComponentSetId: '<from sectionPlan> or null', preferredVariantAxis: '<preferred component\'s size axis name from slotContents[].preferredComponents[].variantAxes, or null>', preferredBooleanDefs: { <all preferredComponents[].booleanDefs keys → true> } }` |
+| **Behavior/Configuration** (columns are size names) | `''` | Size axis name | Size names from the axis | Enable all parent-level booleans from `BOOLEAN_DEFS` (`render-meta.booleanDefs`) to `true` so all documented children are visible. Do **not** vary the configuration axis — use the default configuration | `[]` | `null` |
+| **State-conditional** (columns show default vs active state) | `''` | `''` | State names | Enable all parent-level booleans from `BOOLEAN_DEFS` (`render-meta.booleanDefs`) to `true`, then for each column also set the state variant property for that column | `[]` | `null` |
+| **Slot content** (columns are parent size names showing a preferred component placed in the slot) | `''` (preview is sourced from the parent — preferred is nested via `SLOT_POPULATION`) | The parent's size axis name (so the parent renders at each column's size) | Size names from the **parent's** size axis | Enable all parent-level booleans from `BOOLEAN_DEFS` (`render-meta.booleanDefs`) to `true` (so the slot is visible) | `[]` | `{ slotName: '<from Step 6>', preferredComponentId: '<from Step 6>', preferredComponentSetId: '<from Step 6> or null', preferredVariantAxis: '<preferred component\'s size axis name from render-meta.slotContents[].preferredComponents[].variantAxes, or null>', preferredBooleanDefs: { <all render-meta.slotContents[].preferredComponents[].booleanDefs keys → true> } }` |
 | **Boolean-toggled** (standalone component with booleans controlling structural elements like slots, accessories, subtext) | `''` | `''` | One label per meaningful boolean combination (e.g., `["Default", "With subtext", "No micro button"]`) | Each entry is a `PROPERTY_OVERRIDES` object setting the relevant booleans for that combination | `[]` | `null` |
 
 **Boolean-toggled previews:** For standalone components with no variant axes, show meaningful boolean combinations as separate labeled preview instances. Always include the default state (all booleans at their defaults) plus the fully-enabled state. When the section documents a specific boolean-controlled element (e.g., heading accessory, subtext), show both the on and off states for that element. Boolean-toggled is the **only** section type that does NOT auto-enable parent booleans or recursively enable nested booleans — its per-column `PROPERTY_OVERRIDES` is the configuration spec and must not be clobbered.
 
-**Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview. Both `subCompSetId` and `booleanOverrides` are pre-resolved by the enhanced extraction script (Step 4b) — no additional `figma_execute` exploration is needed to discover them.
+**Sub-component preview sourcing:** When `SUB_COMP_SET_ID` is non-empty, the preview script creates instances from the **sub-component's own component set** instead of the parent's `COMP_SET_ID`. This ensures sub-component section previews show the sub-component in isolation (e.g., four Label instances at different sizes) rather than four full parent component instances. The `SUB_COMP_OVERRIDES` parameter specifies boolean properties to enable on each sub-component instance after creation, so optional internal children (e.g., character count, status icon) are visible in the preview. Both `subCompSetId` and `booleanOverrides` come from `render-meta.subComponents[]` (parsed in Step 4, matched to the section in Step 6) — no `figma_execute` exploration is needed to discover them.
 
 **Slot content preview sourcing:** `slotContent` previews show the parent component with the preferred component **nested inside the actual SLOT node** (not as a standalone preview). The script sources the parent inst at the column's parent size, locates the SLOT node by `SLOT_POPULATION.slotName`, creates an instance of the preferred component (matched to its own size axis when present), and `slotNode.appendChild(prefInst)`. This makes the preview a faithful reference for the table — the SLOT's contextual padding, sizing mode, and spacing are live in the inst tree, so canvas measurements drawn on this preview correctly reflect the slot-imposed values the table documents. If `appendChild` fails for any reason, the preferred component is placed as a 0.6-opacity ghost overlay at the slot's bbox and annotation is skipped for that column. Row ownership in the table is unchanged: it still documents only the hosting container and slot-imposed deltas, not a second full structure spec for the preferred component.
 
@@ -1295,7 +323,7 @@ The annotation plan controls which canvas measurement overlays Step 11c draws on
 
 For each value-column index `i`, build `annotationPlan[i]` — an object whose keys are drawn ONLY from this allowlist:
 
-| Row `spec` (from Step 7) | `annotationPlan[i]` keys emitted | Notes |
+| Row `spec` (from the parsed `.md`, Step 4) | `annotationPlan[i]` keys emitted | Notes |
 |---|---|---|
 | `padding` | `paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd` (all four with the same `{token}`) | Uniform padding |
 | `verticalPadding` | `paddingTop`, `paddingBottom` | Symmetric vertical |
@@ -1304,7 +332,7 @@ For each value-column index `i`, build `annotationPlan[i]` — an object whose k
 | `itemSpacing` / `contentSpacing` / `gapBetween` / `iconLabelSpacing` | `itemSpacing` | Auto-layout gap |
 | `minWidth` / `maxWidth` / `minHeight` / `maxHeight` | that one constraint | Single-axis overlay with `freeText: "min N"` / `"max N"` |
 
-Each entry is `{ token: string|null }`. `token` is the variable name when the row's `display` was token-bound (`"spacing-md (16)"` → `token = "spacing-md"`), or `null` when hardcoded (`"16"` → `token = null`). Pass `token` directly from Step 7's row data — do not re-parse `display`.
+Each entry is `{ token: string|null }`. `token` is the variable name when the row's `display` cell was token-bound (`"spacing-md (16)"` → `token = "spacing-md"`), or `null` when hardcoded (`"16"` → `token = null`). Derive `token` from the parsed row's `display` cell (the text before `" ("`); the `.md` already pre-formatted these cells, so a simple split is all that is needed.
 
 **Explicit blocklist** — any row with one of these `spec` names contributes nothing to `annotationPlan`, even if it appears in the table:
 
@@ -1321,7 +349,7 @@ If `annotationPlan[i]` is empty for every column (e.g., a shape-only or typograp
 
 #### Step 11b: Render the table
 
-Run **one `figma_execute` call** for this section's table. Replace all `__PLACEHOLDER__` values with actual data from Step 7.
+Run **one `figma_execute` call** for this section's table. Replace all `__PLACEHOLDER__` values with the section's data from Step 4 (the parsed `.md` sections / columns / rows).
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -1480,12 +508,12 @@ Replace the following placeholders with the values from Step 11a:
 
 - `__SECTION_ID__` — the section's node ID returned by Step 11b (`sectionId` in the return value)
 - `__COMP_SET_NODE_ID__` — the component set (or standalone component) node ID
-- `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from `subComponents[].subCompSetId` in Step 4b (empty string `''` for non-sub-component sections; also `''` for `slotContent` — the preferred component is nested via `SLOT_POPULATION`, not sourced as `SUB_COMP_SET_ID`)
-- `__DEFAULT_PROPS_JSON__` — object mapping all variant axis names to their default values (from `variantAxes` in Step 4b extraction). When `SUB_COMP_SET_ID` is non-empty, use the sub-component's own variant axes defaults from `subComponents[].subCompVariantAxes` instead.
+- `__SUB_COMP_SET_NODE_ID__` — the sub-component's own component set ID from `render-meta.subComponents[].subCompSetId` (empty string `''` for non-sub-component sections; also `''` for `slotContent` — the preferred component is nested via `SLOT_POPULATION`, not sourced as `SUB_COMP_SET_ID`)
+- `__DEFAULT_PROPS_JSON__` — object mapping all variant axis names to their default values (from `render-meta.variantAxesDefaults`). When `SUB_COMP_SET_ID` is non-empty, use the sub-component's own variant-axes defaults from `render-meta.subComponents[].subCompVariantAxesDefaults` instead.
 - `__VARIANT_AXIS__` — from the decision table in Step 11a
 - `__COLUMN_VALUES_JSON__` — from the decision table in Step 11a
 - `__PROPERTY_OVERRIDES_JSON__` — from the decision table in Step 11a
-- `__SUB_COMP_OVERRIDES_JSON__` — object mapping sub-component boolean property keys to `true`, from `subComponents[].booleanOverrides` in Step 4b (empty object `{}` for non-sub-component sections)
+- `__SUB_COMP_OVERRIDES_JSON__` — object mapping sub-component boolean property keys to `true`, from `render-meta.subComponents[].booleanOverrides` (empty object `{}` for non-sub-component sections)
 - `__SLOT_POPULATION_JSON__` — from the decision table in Step 11a (`null` for every section type EXCEPT `slotContent`; an object describing the slot to populate for `slotContent` sections). When non-null, the script sources from the parent, locates the slot by `slotName`, and `slotNode.appendChild()` an instance of the preferred component.
 - `__IS_BOOLEAN_TOGGLED__` — `true` only for `boolean-toggled` sections; `false` everywhere else. When `false`, the script runs the recursive nested-boolean enabler so all documented optional children are visible. When `true`, it's skipped because per-column `PROPERTY_OVERRIDES` is the configuration spec.
 - `__ANNOTATION_PLAN_JSON__` — from "Build the annotation plan" in Step 11a. Array of length `COLUMN_VALUES.length`. Each entry is either `{}` (no annotations for that column) or an object whose keys are drawn from the allowlist (`paddingTop`, `paddingBottom`, `paddingStart`, `paddingEnd`, `itemSpacing`, `minWidth`, `maxWidth`, `minHeight`, `maxHeight`) and whose values are `{ token: string|null }`.
@@ -1862,7 +890,7 @@ return { success: true, section: SECTION_ID, measurementCount: measurementCount,
 
 ### Step 13: Completion Link
 
-Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 9), replacing `:` with `-` in the node ID:
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (`render-meta.fileKey`) and the `frameId` (returned by Step 9), replacing `:` with `-` in the node ID:
 
 ```
 Structure spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
@@ -1870,7 +898,7 @@ Structure spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameI
 
 ## Notes
 
-- The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, it is treated as a single-entry variants array and there are no variant axes. Preview instance creation in Step 11c uses `compNode.createInstance()` directly for standalone components.
+- The target node referenced by `render-meta.component.compSetNodeId` can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The Step 11c preview script detects the type at render time (`compNode.type === 'COMPONENT_SET'`) and falls back to `compNode.createInstance()` directly for standalone components. For standalone components `render-meta.variantAxes` is empty and there are no variant columns.
 - Dynamic columns: The `#variant-value` template in the header row and `#property-value-cell` in each data row are cloned once per value column, then the original template is removed. Clones are inserted before the Notes column to maintain correct column order. All value columns and the Notes column use `layoutSizingHorizontal = 'FILL'` so Figma's auto-layout distributes width equally across them.
 - Each section is rendered in a separate `figma_execute` call to avoid timeouts.
 - **Native canvas measurements:** Step 11c annotates each preview instance with native Figma measurement overlays via `page.addMeasurement(...)`. Annotation is gated by the section's table — only properties present in `ANNOTATION_PLAN` (paddings, gap/itemSpacing, min/max width/height) are drawn. Token-bound rows render the token name on the line via `freeText`. Hardcoded padding rows are anchored to the child whose edge sits on the container's inner-content edge for that side (computed from the container's autolayout paddings), so Figma's default numeric label naturally matches the autolayout value the table documents. When no child aligns to that edge — e.g., a horizontal capsule whose children are HUG-sized and `counterAxisAlignItems=CENTER` — the line falls back to the first/last visible child but carries a `freeText` override of the autolayout value so the label still matches the table. Hardcoded gap/itemSpacing rows continue to let Figma's default numeric label show through (consecutive children sit edge-to-edge with the gap by definition). Min/max constraints render with a `"min N"` / `"max N"` prefix. Per-instance idempotency is provided by `getMeasurementsForNode` + `deleteMeasurement` before each annotation pass. Both `figma-console` (`figma_execute`) and `figma-mcp` (`use_figma`) execute the identical JS — no MCP-specific branch is needed. Measurements are a canvas overlay and do NOT appear in screenshot output; verify via the `measurementCount` / `plannedColumns` returned by Step 11c.

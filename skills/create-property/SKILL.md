@@ -7,6 +7,13 @@ description: Generate a visual property annotation in Figma showing each configu
 
 Generate a visual property annotation directly in Figma — one exhibit per variant axis and boolean toggle, each showing the available options as component instances with a summary table.
 
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the property annotation into Figma from the input `.md`.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input component `.md` is a **READ-ONLY source of truth. Never edit, append to, or "add a section" to it.** The only artifact this skill produces is the Figma annotation. When the user asks to "create/add a section," "show," or "include" something, render it **in the Figma annotation**, never as an edit to the `.md`.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) Step 0 fail-fast when no `.md` resolves; (b) one-line abort if the Figma MCP connection is dead.
+
 ## MCP Adapter
 
 Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.
@@ -61,8 +68,12 @@ And add `.catch(() => {})` to the batch load: `await Promise.all(fontsToLoad.map
 
 ## Inputs Expected
 
-- **Figma link to the component**: URL to a component set or standalone component in Figma (required)
-- **Figma link to the destination** (optional): URL to the page/frame where the annotation should be placed. If omitted, places it in the same file as the component.
+- **Component `.md` spec** (**required**, user-provided path) — the source-of-truth component spec produced by {{skill:create-component-md}}. **The user tells you where this `.md` lives** — use the exact path they provide; the `.md` may live anywhere. This skill rebuilds its property model from the `.md`'s `render-meta` block; it does NOT re-extract the property surface from Figma. `fileKey`, `nodeId`, and `compSetNodeId` come from `render-meta`, never from a Figma link.
+- **Figma link** (optional) — placement hint only (which page/frame to drop the rendered annotation on, including a cross-file destination) and the target for the two whitelisted minimal live reads in Steps 4a/4b. Never the source of the property contract.
+
+**Asymmetry from the other consumers.** Unlike the Structure / Color / Voice consumers, the `.md` has **no dedicated "Property" body section** to copy. So create-property takes **identity only** from `render-meta` (which lets it skip extraction) and still authors its own property model, normalization, and exhibit plans with light in-memory reasoning. It does not parse a Property section body — there isn't one.
+
+There is no screenshot-only path and no component-link extraction path. Without the component `.md` there is nothing to build from — see Step 0's fail-fast contract.
 
 ## Workflow
 
@@ -70,26 +81,60 @@ Copy this checklist and update as you progress:
 
 ```
 Task Progress:
-- [ ] Step 1: Read instruction file
+- [ ] Step 0: Require the component `.md`; parse render-meta. FAIL FAST if missing.
+- [ ] Step 1: Read instruction file (only as needed for normalization / exhibit-planning reasoning — NOT for re-extraction)
 - [ ] Step 2: Verify MCP connection
 - [ ] Step 3: Read template key from uspecs.config.json
-- [ ] Step 4: Navigate to the component and extract property data
-- [ ] Step 4a: Detect variant-gated booleans (deterministic + interpretation)
-- [ ] Step 4b: Detect variable mode properties (shape, density) — AI search
-- [ ] Step 4c: Discover local child component properties + boolean linkage (deterministic)
-- [ ] Step 4d: Normalize child properties (deterministic script)
-- [ ] Step 4e: AI validation layer + context axis identification — cross-check extraction output before rendering
+- [ ] Step 4: Rebuild the property model from render-meta (variant axes, booleans, slots, instance-swaps, constitutive sub-components) — NO extraction
+- [ ] Step 4a: WHITELISTED LIVE READ #2 — bounded variant-gated-boolean scan for requiredVariantOverrides
+- [ ] Step 4b: WHITELISTED LIVE READ #1 — variable-collection lookup for the 6c variable-mode exhibit
+- [ ] Step 4d: Normalize child properties IN MEMORY (coupled / unified slot / sibling boolean grouping) — no Figma reads
+- [ ] Step 4e: Exhibit planning + context axis + briefDescription IN MEMORY — no Figma reads
 - [ ] Step 5: Re-read instruction file (Pre-Render Validation Checklist, Common Mistakes, Do NOT) and audit
 - [ ] Step 6: Navigate to destination (if different file)
 - [ ] Step 7: Import and detach the Property template
 - [ ] Step 8: Fill header fields
 - [ ] Step 9: Build property exhibits with component instances
 - [ ] Step 10: Visual validation
+- [ ] Step 11: Completion link (reports sourceHash from render-meta)
 ```
 
-### Step 1: Read Instructions
+### Step 0: Require the component `.md` and parse `render-meta` (fail fast)
 
-Read [agent-property-instruction.md]({{ref:property/agent-property-instruction.md}})
+**This skill is a consumer of the `.md` source of truth.** It does not re-extract the property surface from Figma — `extract-api`/`create-component-md` already captured the component's variant axes, booleans, slots, instance-swaps, and constitutive sub-components into the `.md`'s `render-meta` block. Your job is to rebuild the property model from `render-meta` and author the exhibits.
+
+**Asymmetry from the other consumers.** The `.md` has NO dedicated "Property" body section to parse. So this skill gets **identity only** from `render-meta` (to skip extraction) and still authors its own property model + exhibit plans with light in-memory reasoning. There is no Property section body — `render-meta` is the only thing you read from the `.md`.
+
+1. **Resolve the `.md` path.** Use the exact path the user gave, else an attached or open `.md` in context. The `.md` may live anywhere; do NOT invent or guess a path. If neither resolves to an existing file, abort per item 2. Never pause to ask the user which file to use.
+2. **Require the file.** If no file exists at the resolved `.md` path, **abort immediately** with this exact single-line diagnostic and stop — do NOT fall back to extraction:
+
+   > This skill requires the component's Markdown `.md` spec (produced by create-component-md). Provide the path to it. (create-component-md needs a _base.json from the uSpec Extract plugin.)
+
+3. **Parse the `render-meta` block** (the fenced JSON between `<!-- render-meta:start v=1 -->` and `<!-- render-meta:end -->`; schema in `references/component-md/agent-component-md-instruction.md` § **RENDER_META_JSON**). Capture:
+   - `component` = `{ componentName, compSetNodeId, isComponentSet }`.
+   - `variantAxes` — `{ <axisName>: [<option>, …] }`.
+   - `variantAxesDefaults` — `{ <axisName>: <default> }`.
+   - `booleanDefs[]` — `{ key, default, associatedLayerName, associatedLayerId }`. Each `key` is the raw component-property key `setProperties` expects.
+   - `propertyDefs` — keyed by raw key; each `{ type, default?, values?, preferredComponentKey?, associatedLayerName?, associatedLayerId? }`. `type` ∈ `VARIANT | BOOLEAN | INSTANCE_SWAP | SLOT | TEXT | NUMBER`.
+   - `slotContents[]` — `{ slotName, slotNodeType, preferredComponents: [{ componentKey, componentName, componentId, componentSetId, isComponentSet, variantAxes, booleanDefs }] }`.
+   - `subComponents[]` — `{ name, mainComponentName, subCompSetId, subCompVariantAxes, subCompVariantAxesDefaults, booleanOverrides }`.
+   - `fileKey`, `nodeId` — for template placement and the Step 11 completion link.
+   - `sourceHash` — record it; the Step 11 completion footer reports it so downstream readers can detect drift between this render and the `_base.json` that produced the `.md`.
+
+4. **Rebuild the property model** in memory — see Step 4. No Figma reads.
+
+**FORBIDDEN — do NOT re-extract.** When the component `.md` is present (it always is past Step 0), you MUST NOT run the legacy extraction/tree-walk. Specifically:
+- The old **Step 4 extraction script** — the `node.componentPropertyDefinitions` walk that rebuilt `variantAxes`, `booleanProps`, `instanceSwapProps`, and `slotProps` from scratch — is **deleted**. It does not exist in this skill anymore. The property surface comes from `render-meta` (Step 4).
+- The old **Step 4a full variant-gating script** (the one that re-enumerated every `boolDef` and every `variantAxis` from `propDefs` and walked every variant child for every boolean) is **deleted** and replaced by the **bounded** Step 4a scan below — which is whitelisted live read #2.
+- The old **Step 4c child-discovery walk** (`walkForInstances` recursing the default variant for nested instances + the boolean-linkage resolver) is **deleted**. Constitutive child chapters now come from `render-meta.subComponents` (Step 4). Do NOT run any `figma_execute` / `use_figma` script that walks the component tree to rediscover child components or rebuild their property surface.
+- The ONLY Figma reads this skill makes beyond the render scripts are the **two whitelisted minimal live reads**, both bounded:
+  1. **Variable-collection lookup (Step 4b)** — resolve `COLLECTION_ID` / `MODE_ID` / `MODES_JSON` for the 6c variable-mode exhibit by listing **variable collections only**. No component tree walk; no property re-enumeration.
+  2. **Variant-gated-boolean scan (Step 4a)** — a small, bounded scan of *only the booleans already in the model* (from `render-meta.booleanDefs`) to learn which ones are only meaningful under specific variant values (`requiredVariantOverrides`). It does NOT rebuild `propertyDefs` / `variantAxes` / `slotProps` and does NOT discover new properties.
+  Everything else (variant axes, boolean defs, slots, instance-swaps, constitutive sub-components) is read from `render-meta` and consumed verbatim. Normalization (Step 4d) and exhibit planning (Step 4e) run entirely in memory.
+
+### Step 1: Read Instructions (only as needed)
+
+Read [agent-property-instruction.md]({{ref:property/agent-property-instruction.md}}) when you need it for the **Data Validation**, **Exhibit Planning**, **Pre-Render Validation Checklist**, **Common Mistakes**, and **Do NOT** reasoning that Steps 4d/4e/5 perform over the `render-meta`-derived model. Do NOT use it as a prompt to re-extract — the property surface is supplied by `render-meta` (Step 4).
 
 ### Step 2: Verify MCP Connection
 
@@ -112,219 +157,94 @@ Read the file `uspecs.config.json` and extract:
 If the template key is empty, tell the user:
 > The property template key is not configured. Run {{skill:firstrun}} with your Figma template library link first.
 
-### Step 4: Extract Property Data
+### Step 4: Rebuild the property model from `render-meta` (no extraction)
 
-Navigate to the component file and run the extraction script via `figma_execute`.
+Everything the normalization, exhibit planner, and render scripts need about the property surface comes from the `render-meta` block parsed in Step 0 — there is **no extraction call** here (see the Step 0 FORBIDDEN directive). Rebuild this in-memory model from `render-meta` (the field names below are exactly what the render scripts in Step 9 expect):
 
-**Extract the node ID from the URL:** Figma URLs contain `node-id=123-456` → use `123:456`.
+- **`componentName` / `compSetNodeId` / `isComponentSet`** — from `render-meta.component` (`componentName`, `compSetNodeId`, `isComponentSet`). `compSetNodeId` is the `COMP_SET_NODE_ID` every render script consumes.
+- **`variantAxes`** — reshape `render-meta.variantAxes` (`{ axisName: [options] }`) joined with `render-meta.variantAxesDefaults` (`{ axisName: default }`) into `[{ name, options, defaultValue }]`, one entry per axis.
+- **`defaultProps`** — `render-meta.variantAxesDefaults` verbatim (`{ <axisName>: <default> }`). This is the `DEFAULT_PROPS` baseline for 6a/6a-ctx/6a-matrix.
+- **`booleanProps`** — one entry per `render-meta.booleanDefs[]`: `{ name: key.split('#')[0], defaultValue: <default>, associatedLayer: associatedLayerName, rawKey: key, controlsSlot, slotPreferredNames }`. **Carry the raw `key` as `rawKey`** — `setProperties()` needs the raw-key form (cross-check `propertyDefs[key].type === "BOOLEAN"` when in doubt). Derive the slot fields in memory from `render-meta` (no Figma read): `controlsSlot = true` when `associatedLayerName` matches a `render-meta.slotContents[].slotName`; `slotPreferredNames = <that slot's `preferredComponents[].componentName`>` (else `false` / `[]`). These feed the 6b "Controls slot" description.
+- **`instanceSwapProps`** — one entry per `render-meta.propertyDefs` entry whose `type === "INSTANCE_SWAP"`: `{ name: rawKey.split('#')[0], defaultValue: def.default, rawKey }`.
+- **`slotProps`** — one entry per `render-meta.slotContents[]`: `{ name: slotName, preferredInstances: preferredComponents.map(p => ({ componentKey: p.componentKey, componentName: p.componentName, componentId: p.componentId })), rawKey: <matching propertyDefs SLOT key, when present> }`.
+- **`childComponents`** (constitutive sub-component chapters) — from `render-meta.subComponents[]`, **constitutive sets only** (see the SCOPE LIMIT below).
 
-Run this extraction script, replacing `TARGET_NODE_ID` with the actual node ID:
+**SCOPE LIMIT — constitutive sub-component-SETS only.** Only entries in `render-meta.subComponents` with a **non-null `subCompSetId`** get full child chapters (rendered in 6e/6f/6g). For each kept entry, map to the `childComponents` shape the render scripts expect:
+- `name` = `subComponents[].name`; `mainComponentName` = `subComponents[].mainComponentName`.
+- `mainComponentSetId` = `subCompSetId`; `mainComponentId` = `null`; `isComponentSet` = `true`.
+- `variantAxes` = reshape `subCompVariantAxes` (joined with `subCompVariantAxesDefaults`) into `[{ name, options, defaultValue }]`.
+- `booleanProps` = the child booleans `render-meta` carried for this sub-component (derive from `subComponents[].booleanOverrides` keys when present; otherwise `[]`).
+- `visible` = `true` unless a controlling boolean is matched (below).
+- `controllingBooleanName` / `controllingBooleanRawKey` = the parent boolean whose `associatedLayerName` (from `booleanProps`/`render-meta.booleanDefs`) matches this sub-component's `name` (light, in-memory name-match; fall back to normalized-name containment). `null` when no parent boolean controls it.
 
-```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
+Collect the matched controlling-boolean names into a `controllingBooleanNames` array (Step 4d / 6b consume it).
 
-const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
-  return { error: 'Node is not a component set or component. Type: ' + (node ? node.type : 'null') };
-}
+**DEGRADE GRACEFULLY — do NOT re-extract.** Non-constitutive nested instances and child boolean/instance-swap surfaces that are NOT present in `render-meta.subComponents` (because the producer did not capture them as constitutive sets, or carried only `booleanOverrides`) may not get full chapters. Render what `render-meta` provides; when a child surface is incomplete, add a short note in the affected chapter (or the spec header) that the deeper surface lives in the child's own `./{slug}.md` — do **not** run a live tree walk to rediscover it.
 
-const isComponentSet = node.type === 'COMPONENT_SET';
-const propDefs = node.componentPropertyDefinitions;
-const variantAxes = [];
-const booleanProps = [];
-const instanceSwapProps = [];
-const slotProps = [];
+Save the rebuilt model — you will use it in subsequent steps.
 
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  const cleanKey = rawKey.split('#')[0];
-  if (def.type === 'VARIANT') {
-    variantAxes.push({
-      name: cleanKey,
-      options: def.variantOptions || [],
-      defaultValue: def.defaultValue
-    });
-  } else if (def.type === 'BOOLEAN') {
-    let associatedLayer = null;
-    let controlsSlot = false;
-    let slotPreferredNames = [];
-    const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-    const props = defaultVariant.componentProperties;
-    if (props) {
-      for (const [k, v] of Object.entries(props)) {
-        if (k.split('#')[0] === cleanKey && v.type === 'BOOLEAN') {
-          const nodeId = k.split('#')[1];
-          if (nodeId) {
-            try {
-              const layerNode = await figma.getNodeByIdAsync(defaultVariant.id.split(';')[0] + ';' + nodeId);
-              if (layerNode) {
-                associatedLayer = layerNode.name;
-                if (layerNode.type === 'SLOT') {
-                  controlsSlot = true;
-                  const matchedSlotDef = slotProps.find(s => s.name === layerNode.name) ||
-                    Object.entries(propDefs).find(([rk, d]) => d.type === 'SLOT' && rk.split('#')[0] === layerNode.name);
-                  if (matchedSlotDef) {
-                    const sDef = matchedSlotDef.preferredInstances || (matchedSlotDef[1] && matchedSlotDef[1].preferredValues) || [];
-                    const pvArr = Array.isArray(sDef) ? sDef : [];
-                    for (const pv of pvArr) {
-                      if (pv.componentName) slotPreferredNames.push(pv.componentName);
-                    }
-                  }
-                }
-              }
-            } catch {}
-          }
-        }
-      }
-    }
-    booleanProps.push({
-      name: cleanKey,
-      defaultValue: def.defaultValue,
-      associatedLayer,
-      controlsSlot,
-      slotPreferredNames,
-      rawKey
-    });
-  } else if (def.type === 'INSTANCE_SWAP') {
-    instanceSwapProps.push({
-      name: cleanKey,
-      defaultValue: def.defaultValue,
-      rawKey
-    });
-  } else if (def.type === 'SLOT') {
-    const preferred = [];
-    if (def.preferredValues && def.preferredValues.length > 0) {
-      for (const pv of def.preferredValues) {
-        if (pv.type === 'COMPONENT') {
-          let compName = null;
-          try {
-            const comp = await figma.getNodeByIdAsync(pv.key);
-            if (comp) compName = comp.name;
-          } catch {}
-          preferred.push({ componentKey: pv.key, componentName: compName || pv.key });
-        }
-      }
-    }
-    slotProps.push({
-      name: cleanKey,
-      description: def.description || '',
-      preferredInstances: preferred,
-      rawKey
-    });
-  }
-}
+### Step 4a: Variant-gated-boolean scan (WHITELISTED LIVE READ #2 — bounded)
 
-const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-const defaultProps = { ...(defaultVariant.variantProperties || {}) };
+This is one of the **only two** Figma reads this skill makes beyond rendering. `render-meta` tells you which booleans exist and the layer each controls (`booleanDefs[].associatedLayerName` / `associatedLayerId`), but it does NOT record which *variant* a boolean's layer only appears under. A small, bounded scan resolves that so 6b can pick the right base variant. Example: a "Dismiss button" boolean may only control a layer that exists in the `Behavior=Interactive` variant, not in `Behavior=Static`; when the default variant lacks the target layer, toggling the boolean produces identical-looking previews.
 
-return {
-  componentName: node.name,
-  compSetNodeId: TARGET_NODE_ID,
-  isComponentSet,
-  variantAxes,
-  booleanProps,
-  instanceSwapProps,
-  slotProps,
-  defaultProps,
-  defaultVariantName: defaultVariant.name
-};
-```
+**Bound.** Scan ONLY the booleans already in the model (from `render-meta.booleanDefs`), checking each one's layer against the default variant and — only when absent — across the variant children to find the minimal override. This is NOT a property re-extraction: it does not rebuild `propertyDefs`, `variantAxes`, `slotProps`, or `booleanProps`, and it does not discover new properties.
 
-Save the returned JSON — you will use it in subsequent steps.
-
-### Step 4a: Detect Variant-Gated Booleans
-
-Some boolean properties only have a visual effect under specific variant axis values. For example, a "Dismiss button" boolean may only control a layer that exists in the `Behavior=Interactive` variant, not in `Behavior=Static`. When the default variant lacks the target layer, toggling the boolean produces identical-looking previews.
-
-After extracting properties in Step 4, run this script to resolve each boolean's target layer across all variant axis values. Replace `TARGET_NODE_ID` with the actual node ID:
+Run this bounded scan via `figma_execute`. Replace `TARGET_NODE_ID` with `render-meta.component.compSetNodeId` and `__BOOLEAN_DEFS_JSON__` with the `render-meta.booleanDefs[]` array (`{ key, default, associatedLayerName, associatedLayerId }`):
 
 ```javascript
 const TARGET_NODE_ID = '__NODE_ID__';
+const BOOLEAN_DEFS = __BOOLEAN_DEFS_JSON__;
 
 const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
 if (!node || node.type !== 'COMPONENT_SET') {
-  return { skip: true, reason: 'Not a component set — no variant gating possible' };
-}
-
-const propDefs = node.componentPropertyDefinitions;
-const boolDefs = [];
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  if (def.type === 'BOOLEAN') {
-    boolDefs.push({ name: rawKey.split('#')[0], rawKey, nodeIdSuffix: rawKey.split('#')[1] || null });
-  }
-}
-
-const variantAxes = [];
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  if (def.type === 'VARIANT') {
-    variantAxes.push({ name: rawKey.split('#')[0], options: def.variantOptions || [] });
-  }
+  return { skip: true, reason: 'Not a component set — no variant gating possible', interpretedBooleans: [] };
 }
 
 const defaultVariant = node.defaultVariant || node.children[0];
 const defaultVProps = defaultVariant.variantProperties || {};
 
-const boolLayerReport = [];
+const interpretedBooleans = [];
 
-for (const bd of boolDefs) {
-  if (!bd.nodeIdSuffix) {
-    boolLayerReport.push({ name: bd.name, resolved: false, reason: 'No nodeId suffix in rawKey' });
-    continue;
-  }
+for (const bd of BOOLEAN_DEFS) {
+  const rawKey = bd.key || '';
+  const nodeIdSuffix = rawKey.split('#')[1] || null;
+  const result = { name: rawKey.split('#')[0], requiredVariantOverrides: null, layerName: bd.associatedLayerName || null };
+  if (!nodeIdSuffix) { interpretedBooleans.push(result); continue; }
 
-  const layerInDefault = await (async () => {
-    try {
-      const lid = defaultVariant.id.split(';')[0] + ';' + bd.nodeIdSuffix;
-      const ln = await figma.getNodeByIdAsync(lid);
-      return ln ? ln.name : null;
-    } catch { return null; }
-  })();
+  let layerInDefault = null;
+  try {
+    const lid = defaultVariant.id.split(';')[0] + ';' + nodeIdSuffix;
+    const ln = await figma.getNodeByIdAsync(lid);
+    layerInDefault = ln ? ln.name : null;
+  } catch {}
 
-  if (layerInDefault) {
-    boolLayerReport.push({ name: bd.name, layerFoundInDefault: true, layerName: layerInDefault });
-    continue;
-  }
+  if (layerInDefault) { result.layerName = layerInDefault; interpretedBooleans.push(result); continue; }
 
-  let foundInVariant = null;
   for (const child of node.children) {
     const vp = child.variantProperties || {};
     try {
-      const lid = child.id.split(';')[0] + ';' + bd.nodeIdSuffix;
+      const lid = child.id.split(';')[0] + ';' + nodeIdSuffix;
       const ln = await figma.getNodeByIdAsync(lid);
       if (ln) {
         const diffAxis = {};
         for (const [k, v] of Object.entries(vp)) {
           if (defaultVProps[k] !== v) diffAxis[k] = v;
         }
-        foundInVariant = { variantProps: vp, diffFromDefault: diffAxis, layerName: ln.name };
+        result.requiredVariantOverrides = diffAxis;
+        result.layerName = ln.name;
         break;
       }
     } catch {}
   }
-
-  boolLayerReport.push({
-    name: bd.name,
-    layerFoundInDefault: false,
-    foundInVariant,
-    reason: foundInVariant ? 'Layer only exists under different variant axis values' : 'Layer not found in any variant'
-  });
+  interpretedBooleans.push(result);
 }
 
-// --- Interpret variant-gating deterministically ---
-const interpretedBooleans = boolLayerReport.map(entry => {
-  const result = { name: entry.name, requiredVariantOverrides: null, layerName: entry.layerName || null };
-  if (!entry.layerFoundInDefault && entry.foundInVariant) {
-    result.requiredVariantOverrides = entry.foundInVariant.diffFromDefault;
-    result.layerName = entry.foundInVariant.layerName;
-  }
-  return result;
-});
-
-return { boolLayerReport, interpretedBooleans, variantAxes };
+return { interpretedBooleans };
 ```
 
 **How the agent should use this data:**
 
-The script now returns an `interpretedBooleans` array alongside the raw `boolLayerReport`. Each entry in `interpretedBooleans` contains:
+The scan returns an `interpretedBooleans` array — one entry per boolean from `render-meta.booleanDefs`. Each entry contains:
 
 - `name`: the boolean's clean name
 - `requiredVariantOverrides`: an object like `{ "Behavior": "Interactive" }` if the boolean is variant-gated, or `null` if it works on the default variant
@@ -335,11 +255,13 @@ For each boolean in `interpretedBooleans`:
 - **`requiredVariantOverrides === null`** — No action needed. The boolean works on the default variant. Render normally in 6b.
 - **`requiredVariantOverrides` is an object** — The boolean is **variant-gated**. Store the `requiredVariantOverrides` on the boolean entry from Step 4's `booleanProps`. In 6b, use these overrides when looking up the base variant for instance creation. The description should note the dependency (e.g., "Requires Behavior = Interactive").
 
-No AI reasoning is needed — the script has already resolved which booleans are variant-gated and what overrides they require.
+No AI reasoning is needed — the bounded scan has already resolved which booleans are variant-gated and what overrides they require. This scan is whitelisted live read #2; do not extend it into a full property re-extraction.
 
-### Step 4b: Detect Variable Mode Properties
+### Step 4b: Variable-collection lookup (WHITELISTED LIVE READ #1 — bounded)
 
-Some component properties (e.g., shape, density) are controlled via **Figma variable modes** at the container level, not per-instance. These do not appear in `componentPropertyDefinitions` and will be missed by the extraction script above.
+Some component properties (e.g., shape, density) are controlled via **Figma variable modes** at the container level, not per-instance. These never appear in `componentPropertyDefinitions` (and so are not part of the `render-meta` property surface). The 6c variable-mode exhibit needs `COLLECTION_ID` / `MODE_ID` / `MODES_JSON`, which only a variable-collection lookup can supply.
+
+**Bound.** This is **variable collections only** — `figma_get_variables` (or the `getLocalVariableCollectionsAsync()` equivalent). No component tree walk, no property re-enumeration, no instance inspection.
 
 Call `figma_get_variables` with `format: "summary"` to get a lightweight overview of all variable collections in the file. Look for collections whose names contain the component name or common mode-property keywords:
 
@@ -379,154 +301,21 @@ variableModeProps: [
 
 If no matching collections are found, set `variableModeProps` to an empty array and proceed.
 
-### Step 4c: Discover Local Child Component Properties
+### Step 4c: Child component chapters come from `render-meta` (discovery walk DELETED)
 
-Some components contain nested child instances (e.g., a Button inside a Section Heading) that have their own configurable properties. These are not captured by the parent's `componentPropertyDefinitions`. This step walks the default variant's children recursively to find local child components and extract their properties.
+**The legacy Step 4c child-discovery walk is deleted.** The old `walkForInstances` recursion (which walked the default variant for nested INSTANCE children and rebuilt each child's `variantAxes` / `booleanProps` / `instanceSwapProps` from `componentPropertyDefinitions`) plus its boolean-linkage resolver no longer exist in this skill. Do NOT reintroduce a live tree walk to rediscover child components.
 
-Run this script via `figma_execute`, replacing `TARGET_NODE_ID` with the actual node ID. **Pass the parent's `booleanProps` array** (from Step 4) as `PARENT_BOOLEANS` so the script can resolve controlling boolean linkage deterministically:
+The `childComponents` array (with `controllingBooleanName` / `controllingBooleanRawKey` and the matched `controllingBooleanNames`) is rebuilt in **Step 4** from `render-meta.subComponents` (constitutive sub-component-SETS only — those with a non-null `subCompSetId`). Re-read the **SCOPE LIMIT** in Step 4:
+- Only constitutive sub-component-SETS get full child chapters (6e/6f/6g).
+- Child surfaces beyond what `render-meta.subComponents` carried (non-constitutive nested instances, child booleans/instance-swaps the producer did not capture) **degrade gracefully** — render what's available and note the gap, pointing to the child's own `./{slug}.md`. Never re-extract.
 
-```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
-const PARENT_BOOLEANS = __PARENT_BOOLEANS_JSON__;
+If the rebuilt `childComponents` array is empty, proceed — there are no constitutive sub-component chapters to exhibit.
 
-const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
-  return { error: 'Node is not a component set or component.' };
-}
+### Step 4d: Normalize Child Properties (IN MEMORY — no Figma reads)
 
-const isComponentSet = node.type === 'COMPONENT_SET';
-const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
+This is light **in-memory** reasoning over the `render-meta`-derived model from Step 4 — **no `figma_execute`, no Figma reads.** Apply all four sub-analyses (coupled axes, container-gated booleans, unified slots, sibling booleans) to produce the normalization plan. The algorithm below is the reference logic; run it in memory over the model — it touches no Figma node.
 
-const childComponents = [];
-
-async function walkForInstances(container) {
-  for (const child of container.children) {
-    if (child.type === 'INSTANCE') {
-      try {
-        const mainComp = await child.getMainComponentAsync();
-        if (!mainComp) continue;
-
-        const parent = mainComp.parent;
-        const isLocalComponentSet = parent && parent.type === 'COMPONENT_SET';
-
-        const sourceNode = isLocalComponentSet ? parent : mainComp;
-        const propDefs = sourceNode.componentPropertyDefinitions || {};
-
-        const variantAxes = [];
-        const booleanProps = [];
-        const instanceSwapProps = [];
-
-        for (const [rawKey, def] of Object.entries(propDefs)) {
-          const cleanKey = rawKey.split('#')[0];
-          if (def.type === 'VARIANT') {
-            variantAxes.push({
-              name: cleanKey,
-              options: def.variantOptions || [],
-              defaultValue: def.defaultValue
-            });
-          } else if (def.type === 'BOOLEAN') {
-            booleanProps.push({
-              name: cleanKey,
-              defaultValue: def.defaultValue,
-              rawKey
-            });
-          } else if (def.type === 'INSTANCE_SWAP') {
-            instanceSwapProps.push({
-              name: cleanKey,
-              defaultValue: def.defaultValue,
-              rawKey
-            });
-          }
-        }
-
-        if (variantAxes.length === 0 && booleanProps.length === 0 && instanceSwapProps.length === 0) continue;
-
-        childComponents.push({
-          name: child.name,
-          mainComponentName: mainComp.name,
-          mainComponentSetId: isLocalComponentSet ? parent.id : null,
-          mainComponentId: mainComp.id,
-          isComponentSet: isLocalComponentSet,
-          variantAxes,
-          booleanProps,
-          instanceSwapProps,
-          visible: child.visible
-        });
-      } catch {}
-    } else if ('children' in child && child.type !== 'INSTANCE') {
-      await walkForInstances(child);
-    }
-  }
-}
-
-await walkForInstances(defaultVariant);
-
-// --- Boolean linkage: resolve which parent boolean controls each hidden child ---
-const controllingBooleanNames = [];
-
-for (const child of childComponents) {
-  child.controllingBooleanName = null;
-  child.controllingBooleanRawKey = null;
-
-  if (child.visible) continue;
-
-  // Primary: resolve rawKey#nodeId to layer name match
-  for (const pb of PARENT_BOOLEANS) {
-    const nodeIdSuffix = pb.rawKey.split('#')[1];
-    if (!nodeIdSuffix) continue;
-    try {
-      const lid = defaultVariant.id.split(';')[0] + ';' + nodeIdSuffix;
-      const layerNode = await figma.getNodeByIdAsync(lid);
-      if (layerNode && layerNode.name === child.name) {
-        child.controllingBooleanName = pb.name;
-        child.controllingBooleanRawKey = pb.rawKey;
-        break;
-      }
-    } catch {}
-  }
-
-  // Fallback: deterministic normalized name containment
-  if (!child.controllingBooleanName) {
-    const normChild = child.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-    for (const pb of PARENT_BOOLEANS) {
-      const normBool = pb.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (normChild.includes(normBool) || normBool.includes(normChild)) {
-        child.controllingBooleanName = pb.name;
-        child.controllingBooleanRawKey = pb.rawKey;
-        break;
-      }
-    }
-  }
-
-  if (child.controllingBooleanName) {
-    controllingBooleanNames.push(child.controllingBooleanName);
-  }
-}
-
-return { childComponents, controllingBooleanNames };
-```
-
-Replace `__PARENT_BOOLEANS_JSON__` with the `booleanProps` array from Step 4 (e.g., `[{"name":"Trailing content","defaultValue":false,"rawKey":"Trailing content#6051:1","associatedLayer":"trailingContent v2"}]`).
-
-Save the returned `childComponents` array and `controllingBooleanNames` array. Each child entry now contains:
-- `name`: the layer name in the parent (e.g., "trailingContent v2")
-- `mainComponentName`: the source component name (e.g., "Content=Button (text)")
-- `mainComponentSetId` or `mainComponentId`: for creating instances
-- `isComponentSet`: whether it is a multi-variant component set
-- `variantAxes`, `booleanProps`, `instanceSwapProps`: its own properties
-- `visible`: whether it is visible by default in the parent
-- `controllingBooleanName`: the clean name of the parent boolean that controls this child's visibility, or `null` if none found
-- `controllingBooleanRawKey`: the full raw key for `setProperties()`, or `null`
-
-The `controllingBooleanNames` array contains all matched boolean names — these are skipped in 6b (not rendered as standalone boolean chapters).
-
-If `childComponents` is empty, proceed — there are no local child components to exhibit.
-
-### Step 4d: Normalize Child Properties (Deterministic Script)
-
-This is a deterministic data-processing step — no Figma calls needed. Run the following script via `figma_execute`, passing in the extracted data from Steps 4, 4c. It performs all four sub-analyses (coupled axes, container-gated booleans, unified slots, sibling booleans) and returns the full normalization plan.
-
-Replace `__PARENT_VARIANT_AXES_JSON__` with the `variantAxes` array from Step 4, `__CHILD_COMPONENTS_JSON__` with the `childComponents` array from Step 4c, and `__CONTROLLING_BOOLEAN_NAMES_JSON__` with the `controllingBooleanNames` array from Step 4c:
+Operate over the `variantAxes` array from Step 4 as `PARENT_AXES`, the rebuilt `childComponents` array from Step 4 as `CHILDREN`, and the matched `controllingBooleanNames` array from Step 4 as `CONTROLLING_BOOL_NAMES`:
 
 ```javascript
 const PARENT_AXES = __PARENT_VARIANT_AXES_JSON__;
@@ -683,7 +472,7 @@ return {
 };
 ```
 
-Save the returned data. The script produces:
+Save the normalization output. It produces:
 
 - **`childComponents`** — Updated with `coupled: true` flags on child variant axes that mirror parent axes (4d-i). In Step 9 (6e-i), skip axes where `coupled === true`.
 - **`unifiedSlotChapters`** — Array of chapter entries for container + sub-boolean combinations (4d-ii/iii). Each entry has `chapterName`, `childName`, `containerBoolName`, `containerBoolRawKey`, `subBooleans`, `previewCombinations`, and `defaultLabel`. Rendered in 6f.
@@ -701,11 +490,11 @@ Save the returned data. The script produces:
 
 **Graceful fallback**: If a child has only 1 remaining boolean after filtering (not consumed by unified slots), it is NOT added to `siblingBoolChapters` — it stays as a standard boolean chapter rendered in 6e-ii.
 
-### Step 4e: AI Validation and Exhibit Planning
+### Step 4e: Validation and Exhibit Planning (IN MEMORY — no Figma reads)
 
-After all deterministic extraction is complete (Steps 4–4d), perform AI validation and exhibit planning. Follow the **Data Validation** and **Exhibit Planning** sections in the instruction file ([agent-property-instruction.md]({{ref:property/agent-property-instruction.md}})).
+After the model is rebuilt and normalized (Steps 4–4d), perform validation and exhibit planning **in memory** over the `render-meta`-derived model — **no Figma reads**. Follow the **Data Validation** and **Exhibit Planning** sections in the instruction file ([agent-property-instruction.md]({{ref:property/agent-property-instruction.md}})).
 
-This step has two phases: **Phase A** (Data Validation) corrects the extraction data, **Phase B** (Exhibit Planning) plans what to render and how. Do NOT rely on visual inspection (Step 10) as the primary safety net — this step is the designated reasoning layer.
+This step has two phases: **Phase A** (Data Validation) sanity-checks the `render-meta`-derived model, **Phase B** (Exhibit Planning) plans what to render and how. Do NOT rely on visual inspection (Step 10) as the primary safety net — this step is the designated reasoning layer. If a child surface looks incomplete because `render-meta.subComponents` did not carry it, treat it as the documented SCOPE LIMIT (degrade with a note) — do NOT re-extract to fill it.
 
 **Context axis identification** — As the first action in Phase B, follow the "Identify context axes" section in the instruction file. Evaluate each variant axis against the heuristics and select 0–1 context axes (rarely 2). Store the result as `contextAxis`:
 
@@ -784,7 +573,7 @@ figma.viewport.scrollAndZoomIntoView([frame]);
 return { frameId: frame.id, pageId: _p.id, pageName: _p.name };
 ```
 
-Replace `__COMPONENT_NAME__` with the extracted `componentName`. Replace `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL (same as `TARGET_NODE_ID` from Step 4).
+Replace `__COMPONENT_NAME__` with `render-meta.component.componentName`. Replace `__COMPONENT_NODE_ID__` with `render-meta.component.compSetNodeId`.
 
 Save the returned `frameId`.
 
@@ -1357,7 +1146,7 @@ return { success: true, chapter: CHAPTER_NAME };
 
 For exhibit plan entries with `template: "6b"` (when `contextAxis` is null).
 
-**Skip controlling booleans**: Before rendering each parent boolean, check if its `name` appears in the `controllingBooleanNames` set built in Step 4c. If so, skip it — its chapter is produced by 6e as part of the unified child component chapter.
+**Skip controlling booleans**: Before rendering each parent boolean, check if its `name` appears in the `controllingBooleanNames` set built in Step 4 (matched from `render-meta.subComponents`). If so, skip it — its chapter is produced by 6e as part of the unified child component chapter.
 
 **Handle variant-gated booleans**: Before rendering, check if the boolean has `requiredVariantOverrides` (from Step 4a). If so, the base variant for instance creation must match those overrides instead of using the default variant. Replace `VARIANT_OVERRIDES` with the required overrides object (e.g., `{"Behavior": "Interactive"}`), or `null` if the boolean is not variant-gated.
 
@@ -1858,7 +1647,7 @@ return { success: true, property: PROPERTY_NAME };
 
 #### 6e: For each CHILD COMPONENT
 
-If `childComponents` from Step 4c is not empty, render chapters for each child component.
+If the `childComponents` array rebuilt in Step 4 (from `render-meta.subComponents`, constitutive sets only) is not empty, render chapters for each child component.
 
 **Rendering mode selection:** The preferred approach is **in-context rendering** — creating parent component instances with the child's property varied on the nested instance. This shows the child property in the context of the full parent component, which matches the designer's experience.
 
@@ -2060,7 +1849,7 @@ for (const option of axis.options) {
 return { success: true, childComponent: CHILD_NAME };
 ```
 
-Replace `__COMP_SET_NODE_ID__` with the **parent** component's `compSetNodeId` (from Step 4 extraction), not the child's. Set `__CONTROLLING_BOOL_RAW_KEY_OR_NULL__` to the quoted raw key string if a controlling boolean was found (e.g., `'Trailing content#6051:1'`), or `null` if none.
+Replace `__COMP_SET_NODE_ID__` with the **parent** component's `compSetNodeId` (`render-meta.component.compSetNodeId`), not the child's. Set `__CONTROLLING_BOOL_RAW_KEY_OR_NULL__` to the quoted raw key string if a controlling boolean was found (e.g., `'Trailing content#6051:1'`), or `null` if none.
 
 ##### 6e-ii: Child boolean properties (in parent context)
 
@@ -2605,12 +2394,16 @@ return { success: true };
 
 ### Step 11: Completion Link
 
-Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 7), replacing `:` with `-` in the node ID:
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (`render-meta.fileKey`) and the `frameId` (returned by Step 7), replacing `:` with `-` in the node ID. **Provenance footer:** also report the `sourceHash` recorded from `render-meta` (Step 0) so downstream readers can detect drift between this render and the `_base.json` that produced the `.md`:
 
 ```
 Property spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+Source: {mdPath} (render-meta sourceHash: {sourceHash})
 ```
 
 ## Notes
 
+- **This skill consumes the component `.md`** (the source of truth produced by {{skill:create-component-md}}) and rebuilds its property model from the `.md`'s `render-meta` block — `compSetNodeId`, variant axes, boolean defs, slot contents, instance-swaps, and constitutive sub-components all come from `render-meta`. It does NOT extract the property surface from Figma — see the Step 0 FORBIDDEN directive. **Asymmetry:** the `.md` has no Property body section, so this skill takes identity only from `render-meta` and still authors its own property model + exhibit plans (Steps 4–4e) with light in-memory reasoning.
+- The ONLY Figma reads beyond the render scripts are the two bounded whitelisted live reads: the **variant-gated-boolean scan** (Step 4a, read #2) and the **variable-collection lookup** (Step 4b, read #1). Normalization (4d) and exhibit planning (4e) run entirely in memory.
+- **Scope limit:** only constitutive sub-component-SETS (`render-meta.subComponents` entries with a non-null `subCompSetId`) get full child chapters. Deeper/non-constitutive child surfaces degrade gracefully with a note rather than being re-extracted.
 - See the instruction file ([agent-property-instruction.md]({{ref:property/agent-property-instruction.md}})) for implementation notes, normalization reference, rendering mode selection guidance, common mistakes, and do-not rules.

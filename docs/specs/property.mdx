@@ -9,6 +9,10 @@ description: "Generate visual property annotations with variant exhibits directl
 
 The property skill documents every configurable property of a component — variant axes, boolean toggles, variable modes, and child component properties — each shown as a visual exhibit with live instance previews.
 
+<Tip>
+  `create-property` now renders **from the [Component Markdown](/specs/component-md) source of truth**. Run `create-component-md` first to produce `components/<slug>.md`; this skill takes the component's property identity from the `.md`'s `render-meta` block and renders the Figma frame. It no longer re-extracts from Figma, and it fails fast if the `.md` is missing.
+</Tip>
+
 ## What you get
 
 <CardGroup cols={2}>
@@ -28,36 +32,38 @@ The property skill documents every configurable property of a component — vari
 
 ## What you need
 
-- A **Figma link** to a component set or standalone component
-- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP)
+- A **component `.md`** produced by `create-component-md` (run it first — `create-component-md` needs a `_base.json` from the uSpec Extract plugin). Tell the skill where this `.md` lives — `components/<slug>.md` is only `create-component-md`'s default output path; the file can live anywhere. Without it this skill aborts.
+- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP) — used only to render the frame.
+- Context about the component is captured upstream by `create-component-md`; nothing extra is needed here.
+
+<Note>
+  Properties has no dedicated body section in the `.md`. It rebuilds the property model — variant axes, boolean defs, variable modes, slot contents, and sub-component identities — directly from the `.md`'s `render-meta` block.
+</Note>
 
 ## How to use
 
-Reference the skill and paste your Figma link. Add any context about the component to help the agent label properties correctly:
+Reference the skill and pass the component `.md`. Add a render destination or any extra context the spec can't carry:
 
 <Tabs>
   <Tab title="Cursor">
     ```
-    @create-property https://www.figma.com/design/abc123/Components?node-id=100:200
+    @create-property ./components/button.md
 
-    This is a button with Size (Large, Medium, Small), Hierarchy (Primary, Secondary, Tertiary),
-    and optional leading/trailing icons.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Claude Code">
     ```
-    /create-property https://www.figma.com/design/abc123/Components?node-id=100:200
+    /create-property ./components/button.md
 
-    This is a button with Size (Large, Medium, Small), Hierarchy (Primary, Secondary, Tertiary),
-    and optional leading/trailing icons.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Codex">
     ```
-    $create-property https://www.figma.com/design/abc123/Components?node-id=100:200
+    $create-property ./components/button.md
 
-    This is a button with Size (Large, Medium, Small), Hierarchy (Primary, Secondary, Tertiary),
-    and optional leading/trailing icons.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
 </Tabs>
@@ -77,41 +83,37 @@ Reference the skill and paste your Figma link. Add any context about the compone
 | Child component chapters | Nested component properties rendered on parent instances |
 | Default labels | The default value for each property is labeled |
 
-The skill dynamically reads `componentPropertyDefinitions` from the component set, so the output adapts to any component regardless of how many properties it has.
+The skill rebuilds the property model from the `.md`'s `render-meta` block (`componentPropertyDefinitions`, variant axes, boolean defs, variable modes), so the output adapts to any component regardless of how many properties it has.
 
 ## How it works
 
-The property skill is primarily deterministic — scripts handle property extraction, template layout, and instance rendering, while AI reasoning handles normalization decisions and label generation.
+The property skill is primarily deterministic — scripts rebuild the property model from `render-meta`, lay out the template, and render instances, while AI reasoning handles normalization decisions and label generation.
 
 <Badge color="green" size="sm" shape="pill">70% Deterministic</Badge> <Badge color="purple" size="sm" shape="pill">30% AI Reasoning</Badge>
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Extract data| C[Figma MCP]
-    C -->|Component data| B
-    B -->|Render| C
+    A[You] -->|run create-component-md| M["components/&lt;slug&gt;.md"]
+    M -->|render-meta| B[create-property Skill]
+    B -->|Render| C[Figma MCP]
     C -->|Annotation frame| D[Figma Output]
 ```
 
 <Steps>
-  <Step title="Extract">
-    The skill reads `componentPropertyDefinitions`, `variantProperties`, and child layer data from the component set via the Figma MCP.
+  <Step title="Require the .md">
+    The skill requires `components/<slug>.md` (produced by `create-component-md`) and fails fast if it is missing — it does not re-extract from Figma.
   </Step>
-  <Step title="Detect variable modes">
-    Variable collections (shape, density) are identified by looking for collections named after the component.
+  <Step title="Rebuild the property model">
+    Properties has no dedicated body section, so the skill rebuilds the property model — `componentPropertyDefinitions`, `variantProperties`, variable modes, and child component properties — directly from the `.md`'s `render-meta` block.
   </Step>
-  <Step title="Discover child components">
-    Nested component instances are resolved to find their own configurable properties (variant axes, booleans, instance swaps).
-  </Step>
-  <Step title="Normalize">
-    Coupled axes, container-gated booleans, unified slots, and sibling booleans are consolidated to avoid redundant exhibits.
+  <Step title="Build render inputs">
+    Coupled axes, container-gated booleans, unified slots, and sibling booleans are consolidated from the rebuilt model to avoid redundant exhibits — no live extraction walk.
   </Step>
   <Step title="Import template">
     The property documentation template is imported from the library, instantiated, and detached into an editable frame.
   </Step>
   <Step title="Render">
-    The skill fills header fields, clones chapter sections, creates component instances for visual exhibits, and labels defaults.
+    The skill fills header fields, clones chapter sections, creates component instances for visual exhibits, and labels defaults, resolving each exhibit against the live component set by name-match.
   </Step>
   <Step title="Validate">
     A screenshot is captured and checked for completeness. Issues are fixed automatically for up to 3 iterations.

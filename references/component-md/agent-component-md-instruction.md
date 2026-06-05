@@ -318,10 +318,22 @@ Read `voice.data` (`VoiceSpecData`). Render in this exact order:
      - Then rows from `table.properties[]`.
 4. **Slot insertions** — if `data.focusOrder.slotInsertions` is non-empty, or any `state.slotInsertions` is non-empty, append a `### Slot insertions` block listing each insertion in prose:
    - `- In focus order preview: slot **{slotName}** populated with **{componentNodeId}**. Overrides: {nestedOverrides or '—'}`.
+5. **Hidden focus-stop carry (machine-readable).** Immediately after the Voice body's last sub-section, emit a single HTML comment that carries the **Figma layer name** for every focus stop, so `create-voice` can name-match its focus markers to live Figma layers without re-extracting. This is intentionally a hidden carry — it must NOT clutter the human-readable focus-order or platform tables. Build it as follows:
+   - Collect the dedup union of every focus-stop table across `data.focusOrder.tables[]` (first) and `data.states[].sections[].tables[]`, keyed by the table's `name` (focus-stop part name). For each unique `name`, take `layerName`, `focusOrderIndex`, and `slotIndex` from the first table carrying that name (focus-order tables win when present).
+   - Emit verbatim (no surrounding prose, no fenced code block — a raw HTML comment so it never renders):
+
+     ```
+     <!-- voice-render-meta v=1
+     { "focusStops": [ { "name": "<part name>", "focusOrderIndex": <n>, "layerName": "<figma layer name or null>", "slotIndex": <n or null> }, ... ] }
+     -->
+     ```
+   - The JSON is single-block, valid JSON (a `null` for missing `layerName`/`slotIndex`). Key ordering: `name`, `focusOrderIndex`, `layerName`, `slotIndex`. Arrays preserve focus-order order, then state-only stops in first-seen order.
+   - When `data.focusOrder` is absent and there is a single focus stop, still emit the carry with that one stop (so single-stop components also resolve their marker by layer name).
 
 Rules:
 - Always emit exactly three platform sub-sections per state (`VoiceOver (iOS)`, `TalkBack (Android)`, `ARIA (Web)`), in that order. If a state's platform section is missing in the JSON, emit the heading with an explicit `> Missing from extraction — re-run extract-voice.` blockquote so the engineer spots the gap.
 - Behavioral states (not backed by a Figma variant) are rendered identically to Figma-variant states. The only difference is `state.variantProps` will match the default variant props.
+- The `voice-render-meta` carry is the **only** machine-readable addition to the Voice body. It never appears as visible text; `create-voice` parses it from the raw `.md`. If `layerName` is `null` for a stop, the carry still lists it (with `"layerName": null`) so consumers can degrade gracefully.
 
 ## Known gaps
 
@@ -592,6 +604,7 @@ Before the orchestrator writes the final file, verify:
 - [ ] Every `###` heading has a body — no dangling empty sub-sections.
 - [ ] Strategy A / Strategy B for color matches `color._extractionArtifacts.strategy`.
 - [ ] The voice block has exactly 3 platform sub-sections per state.
+- [ ] The Voice body ends with a single `<!-- voice-render-meta v=1 ... -->` HTML comment whose JSON parses and lists one `focusStops[]` entry per unique focus-stop name, each carrying `layerName` (string or `null`) and `slotIndex` (number or `null`). The carry is a hidden comment — it never appears as visible text in any table.
 - [ ] Cross-section invariants block is ≤ 6 bullets.
 - [ ] Cross-references block either has bullets or explicitly says "No cross-references detected between sections."
 - [ ] Known gaps block is present and aggregates provenance + `_extractionNotes.warnings` + `_deltaExtractions` + `_identityResolved=false` + `_selfCheck.missingChildren` + reconciliations (`data.unresolved[]`). It does NOT contain any container-hint–derived entries — those live in the Follow-ups block.

@@ -60,10 +60,28 @@
         padding: 12px 16px;
         border-top: 1px solid var(--border);
         display: flex;
+        flex-direction: column;
         gap: 8px;
         background: var(--bg);
         flex: none;
       }
+      .footer-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        width: 100%;
+      }
+      .file-link {
+        width: 100%;
+        padding: 8px 10px;
+        font: inherit;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      .file-link::placeholder { color: var(--fg-muted); }
+      .file-link.invalid { border-color: var(--danger); }
 
       .meta-footer {
         padding: 6px 16px 8px;
@@ -214,7 +232,7 @@
   <body>
     <header>
       <h1>uSpec Extract</h1>
-      <div class="subtitle" id="subtitle">Select a component or component set to begin.</div>
+      <div class="subtitle" id="subtitle">Provide a link and select component to extract.</div>
     </header>
 
     <main id="main">
@@ -224,14 +242,25 @@
     </main>
 
     <footer>
-      <button class="secondary" id="refreshBtn">Refresh</button>
-      <div class="flex-grow"></div>
-      <button class="secondary" id="copyBtn" disabled>Copy JSON</button>
-      <button class="primary" id="downloadBtn" disabled>Extract &amp; download</button>
+      <div class="footer-row">
+        <input
+          id="fileLinkInput"
+          class="file-link"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Paste link to component (required)"
+        />
+      </div>
+      <div class="footer-row">
+        <button class="secondary" id="refreshBtn">Refresh</button>
+        <div class="flex-grow"></div>
+        <button class="primary" id="downloadBtn" disabled>Extract &amp; download</button>
+      </div>
     </footer>
 
     <div class="meta-footer">
-      <span><a href="https://uspec.design/" target="_blank" rel="noopener noreferrer">uSpec.design</a> (extractor v2.4.0)</span>
+      <span><a href="https://uspec.design/" target="_blank" rel="noopener noreferrer">uSpec.design</a> (extractor v2.5.0)</span>
       <span>by <a href="https://www.linkedin.com/in/iguisard/" target="_blank" rel="noopener noreferrer">Ian Guisard</a></span>
     </div>
 

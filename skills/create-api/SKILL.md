@@ -7,6 +7,13 @@ description: Generate API overview specifications documenting component properti
 
 Generate an API overview directly in Figma — property tables with values, defaults, required status, sub-component tables, and configuration examples.
 
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the API overview into Figma from the input `.md`.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input component `.md` is a **READ-ONLY source of truth. Never edit, append to, or "add a section" to it.** The only artifact this skill produces is the Figma annotation. When the user asks to "create/add a section," "show," or "include" something, render it **in the Figma annotation**, never as an edit to the `.md`.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) Step 0 fail-fast when no `.md` resolves; (b) one-line abort if the Figma MCP connection is dead.
+
 ## MCP Adapter
 
 Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.
@@ -37,9 +44,10 @@ This walks up to the PAGE ancestor and loads its content. Console MCP does not n
 
 ## Inputs Expected
 
-- **Figma link**: URL to a component set or standalone component in Figma (preferred)
-- **Screenshot**: Image of the UI component (alternative if no Figma link)
-- **Description** (optional): Component name, specific properties to document, sub-components
+- **Component `.md` spec** (**required**, user-provided path) — the source-of-truth component spec produced by {{skill:create-component-md}}. **The user tells you where this `.md` lives** — use the exact path they provide; the `.md` may live anywhere. This skill **renders the API section from the `.md`**; it does NOT re-extract anything from Figma and does NOT re-identify properties. `fileKey`, `nodeId`, and `compSetNodeId` come from the `.md`'s `render-meta` block.
+- **Figma link** (optional) — placement hint only (where to drop the rendered frame on the canvas) and the target for the single whitelisted TEXT-node listing in Step 5. Never the source of structural facts or the property contract.
+
+There is no screenshot-only path. Without the component `.md` there is nothing to render — see Step 0's fail-fast contract.
 
 ## Workflow
 
@@ -47,15 +55,14 @@ Copy this checklist and update as you progress:
 
 ```
 Task Progress:
-- [ ] Step 1: Read instruction file
-- [ ] Step 2: Verify MCP connection (if Figma link provided)
+- [ ] Step 0: Require + parse the component `.md` (API body + render-meta). FAIL FAST if missing.
+- [ ] Step 1: Read instruction file (only as needed for example-projection / isSubProperty prose — NOT for re-identifying the API)
+- [ ] Step 2: Verify MCP connection
 - [ ] Step 3: Read template key from uspecs.config.json
-- [ ] Step 4: Gather context (MCP tools + user-provided input)
-- [ ] Step 4b: Run extraction script for deterministic property identification
-- [ ] Step 4c: Build working evidence set (raw facts before interpretation)
-- [ ] Step 5: Identify properties and sub-components
-- [ ] Step 6: Generate structured data (main table, sub-component tables, config examples)
-- [ ] Step 7: Re-read instruction file (Pre-Output Validation Checklist, Common Mistakes, Do NOT) and audit
+- [ ] Step 4: Build render inputs from the parsed .md (main table, sub-component tables, config examples, referenced components) — NO extraction
+- [ ] Step 5: Re-derive light values (required, isSubProperty, example→raw-key projection, slot insertions) + the ONE whitelisted TEXT-node listing for preview text overrides
+- [ ] Step 6: (folded into Step 4 — the property/sub-component tables are ALREADY authored in the .md)
+- [ ] Step 7: Audit the assembled render inputs against the .md
 - [ ] Step 8: Import and detach the API template
 - [ ] Step 9: Fill header fields
 - [ ] Step 10: Fill main API table
@@ -64,13 +71,45 @@ Task Progress:
 - [ ] Step 13: Visual validation
 ```
 
-### Step 1: Read Instructions
+### Step 0: Require and parse the component `.md` (fail fast)
 
-Read [agent-api-instruction.md]({{ref:api/agent-api-instruction.md}})
+**This skill is a consumer of the `.md` source of truth.** It does not re-extract from Figma and does not re-run the property-identification reasoning layer — that work already happened in `extract-api`/`create-component-md` and is baked into the `.md`'s API section (Properties table, sub-component tables, configuration examples, referenced-components tables). Your job is to render that section into a Figma frame.
+
+1. **Resolve the `.md` path.** Use the exact path the user gave, else an attached or open `.md` in context. The `.md` may live anywhere; do NOT invent or guess a path. If neither resolves to an existing file, abort per item 2. Never pause to ask the user which file to use.
+2. **Require the file.** If no file exists at the resolved `.md` path, **abort immediately** with this exact single-line diagnostic and stop — do NOT fall back to extraction:
+
+   > This skill requires the component's Markdown `.md` spec (produced by create-component-md). Provide the path to it. (create-component-md needs a _base.json from the uSpec Extract plugin.)
+
+3. **Parse the API section body** (`## API`) from the `.md`. Copy these verbatim — they are already authored, do not re-derive them:
+   - **General notes** — the blockquote (`> …`) immediately under the confidence header, if present → `GENERAL_NOTES`.
+   - **Properties table** — the table with columns `Property | Type | Values | Default | Notes` → the main table rows. Each row carries `property` (the `Property` cell), `values` (the `Values` cell, pipe-joined verbatim), `default` (the `Default` cell), and `notes` (the `Notes` cell).
+   - **Sub-component tables** — each `### {name}` sub-section (with optional description) whose body is a `Property | Type | Values | Default | Notes` table → one sub-component entry `{ name, description, properties: [...] }`.
+   - **Configuration examples** — each `### {name}` sub-section consisting of a description paragraph + a fenced `code` block → one example entry `{ name, description, code }`. The fenced block is the `example.code` string; keep it intact for the Step 5 projection.
+   - **Referenced components** — the `### Referenced components` sub-section (when present): each `#### {displayName}` lead paragraph + `Prop passed to … | Value in this context | Notes` table → one referenced-component entry. These render as additional sub-component tables (the `.md` is the source of truth for the referenced child's placement props; its full property surface lives in its own spec).
+4. **Parse the `render-meta` block** (the fenced JSON between `<!-- render-meta:start v=1 -->` and `<!-- render-meta:end -->`):
+   - `COMP_SET_ID` = `component.compSetNodeId` — the target for live preview instances (Step 12) and the single whitelisted read (Step 5).
+   - `propertyDefs` — keyed by **raw component-property key** (e.g. `"clear button#10225:1"`); each entry `{ type, default?, values?, preferredComponentKey?, associatedLayerName?, associatedLayerId? }`. This is the raw-key dictionary used to project human prop names in configuration examples to the keys `setProperties` expects.
+   - `booleanDefs[]` — `{ key, default, associatedLayerName, associatedLayerId }`; `key` is the raw component-property key.
+   - `slotContents[]` — for resolving configuration-example slot insertions: each entry `{ slotName, slotNodeType, preferredComponents: [{ componentKey, componentName, componentId, … }] }`. The `componentId` is the live node id to instantiate into a slot.
+   - `fileKey`, `nodeId` — for the Step 14 completion link and template placement.
+   - `sourceHash` — record it; the completion footer reports it so downstream readers can detect drift between this render and the `_base.json` that produced the `.md`.
+
+**FORBIDDEN — do NOT re-extract / do NOT re-identify.** When the component `.md` is present (it always is past Step 0), you MUST NOT run the legacy extraction or the property-identification reasoning pass. Specifically:
+- The old **Step 4b extraction script** (the `componentPropertyDefinitions` walk that rebuilt `variantAxes`, `booleanProps`, `instanceSwapProps`, `slotProps`, `composableChildren`, `ownershipHints`, `textNodeMap`, etc.) is **deleted** — it does not exist in this skill anymore. Do NOT run any `figma_execute` / `use_figma` script that walks the component tree to rebuild the property surface.
+- The old **Step 4 context-gathering** (navigate / screenshot / `figma_get_file_data` / `figma_get_component` / `figma_get_variables`), the old **Step 4c working-evidence-set**, and the old **Step 5–6 property-identification reasoning** (variant decomposition, override-promotion pass, variable-mode classification, ownership/nesting decisions, sub-component pattern selection, `ApiOverviewData` synthesis) are all **deleted/demoted**. The Properties table, sub-component tables, configuration examples, and referenced-components tables are **already authored** in the `.md` — copy them verbatim; do NOT re-identify properties.
+- The ONLY Figma reads this skill makes are: the **single whitelisted TEXT-node listing** in Step 5 (bounded below), the template import (Step 8), the header fill (Step 9), the table fills (Steps 10–11), and the configuration-example previews (Step 12). No other live reads are permitted.
+
+### Step 1: Read References (only as needed)
+
+The property contract is already authored in the `.md` — you do NOT re-identify it. Read [agent-api-instruction.md]({{ref:api/agent-api-instruction.md}}) **only** if you need to reason about a narrow rendering detail while building inputs:
+- the `isSubProperty` Notes-prose convention (the `"Only meaningful when {parentProperty} = {triggerValue}. …"` template) when re-deriving the hierarchy flag in Step 5;
+- the configuration-example `code` shape when projecting human prop names to raw `render-meta.propertyDefs` keys in Step 5.
+
+Skip this step entirely when the `.md`'s configuration examples have no slot/variant overrides to project. Do NOT use the instruction file to re-run property identification — that reasoning is demoted (see Step 0 FORBIDDEN).
 
 ### Step 2: Verify MCP Connection
 
-If a Figma link is provided, read `mcpProvider` from `uspecs.config.json` and verify the connection:
+Read `mcpProvider` from `uspecs.config.json` and verify the connection (rendering — and the single whitelisted Step 5 read — require a live Figma session):
 
 **If `figma-console`:**
 - `figma_get_status` — Confirm Desktop Bridge plugin is active
@@ -87,411 +126,69 @@ Read the file `uspecs.config.json` and extract the `apiOverview` value from the 
 Save this key as `API_TEMPLATE_KEY`. If the key is empty, tell the user:
 > The API overview template key is not configured. Run {{skill:firstrun}} with your Figma template library link first.
 
-### Step 4: Gather Context
+### Step 4: Build render inputs from the parsed `.md` (no extraction)
 
-Use ALL available sources to maximize context:
+Everything the render scripts need comes from the `.md` you parsed in Step 0. Assemble the render inputs directly — there is **no extraction call** here (see the FORBIDDEN directive in Step 0). Copy the authored content verbatim:
 
-**From user:**
-- Any screenshots or images provided
-- Component description and context
-- Specific properties or sub-components to document
+- **`GENERAL_NOTES`** — the API section's general-notes blockquote, verbatim. Empty when the `.md` has no general notes (`HAS_GENERAL_NOTES = false`).
+- **`PROPERTIES` (main table)** — one row per Properties-table row in the `.md`: `{ property, values, default, notes, required?, isSubProperty? }`. The `property`, `values`, `default`, and `notes` cells are copied verbatim. `required` and `isSubProperty` are re-derived in Step 5 (they are not stored as their own columns in the `.md`).
+- **`SUB_COMPONENT_TABLES`** — one entry per `### {name}` sub-component sub-section in the `.md`: `{ name, description, properties: [{ property, values, default, notes, required?, isSubProperty? }] }`. Rows copied verbatim; `required` / `isSubProperty` re-derived in Step 5.
+- **`REFERENCED_COMPONENTS`** — the `### Referenced components` block (when present). Each `#### {displayName}` renders as an additional sub-component table whose rows come from the referenced child's `Prop passed to … | Value in this context | Notes` table (verbatim). The referenced child's full property surface lives in its own spec and is **not** re-expanded here.
+- **`CONFIG_EXAMPLES`** — one entry per `### {name}` configuration example: `{ name, description, code }`, where `code` is the fenced `code` block string. The live-preview inputs (`VARIANT_PROPS`, `CHILD_OVERRIDES`, `TEXT_OVERRIDES`, `SLOT_INSERTIONS`, `EXAMPLE_PROPERTIES`) are projected from `code` + `render-meta` in Step 5.
+- **`COMP_SET_ID`** — `render-meta.component.compSetNodeId`.
 
-**From MCP tools (when Figma link provided):**
-1. `figma_navigate` — Open the component URL
-2. `figma_take_screenshot` — Capture the component and its variants
-3. `figma_get_file_data` — Get component set structure with variant axes
-4. `figma_get_component` — Get detailed component data for specific instance
-5. `figma_get_component_for_development` — Get component data with visual reference
-6. `figma_get_variables` — Check for variable mode-controlled properties (shape, density). Treat this as required deterministic input, not an optional enrichment step.
-7. `figma_search_components` — Find component by name if needed
+**Provenance.** Tag each emitted row by origin as you assemble it: `md` for anything copied verbatim from the `.md` body (Properties table, sub-component tables, referenced-components tables, example descriptions/code); `inferred` for the light Step 5 re-derivations (`required`, `isSubProperty`, the example→raw-key projection, slot-insertion targeting); `measured` for the live TEXT-node listing read in Step 5. Carry `sourceHash` from `render-meta` through to the Step 14 completion footer.
 
-### Step 4b: Run Extraction Script
+> The legacy "gather context + run the `componentPropertyDefinitions` extraction script" flow has been **removed**. Do not reintroduce it. The `.md` + `render-meta` are the complete input.
 
-When a Figma link is provided, run this extraction script via `figma_execute` to programmatically extract all component properties. Replace `__NODE_ID__` with the component set node ID extracted from the URL (`node-id=123-456` → `123:456`):
+### Step 5: Re-derive light values + the one whitelisted live read
+
+The `.md` already authored the property contract. Only a few render-time values are not stored as their own columns — re-derive them cheaply, **without** re-identifying properties:
+
+**`required`** — derive from the `Default` cell using the existing rule: a row with an empty / absent default is `required` (`Yes`); a row with any default value is not required (`No`). Do not re-reason about the property's semantics — read the `default` cell only.
+
+**`isSubProperty`** — derive from the `Notes` prose, not from a live tree. A row whose `Notes` cell begins with the authored template `"Only meaningful when {parentProperty} = {triggerValue}. …"` is a sub-property (`isSubProperty = true`); it renders with the hierarchy indicator and stays immediately after its parent row (the `.md` already orders it that way). Rows without that prose are top-level. The same rule applies inside sub-component tables.
+
+**Configuration-example projection** — for each `CONFIG_EXAMPLES` entry, parse the fenced `code` string into the (human prop name → value) pairs it sets, then build:
+- **`EXAMPLE_PROPERTIES`** — the example table rows `{ property, value, notes }`, one per pair shown in the `code` (human-readable names, verbatim from the example).
+- **`VARIANT_PROPS`** / **`CHILD_OVERRIDES`** — the same pairs projected to the **raw component-property keys** `setProperties` expects, by mapping each human prop name onto the matching `render-meta.propertyDefs` raw key (e.g. the human `clear button` → `"clear button#10225:1"`). Variant axes and boolean toggles go in `VARIANT_PROPS`; per-child overrides for composable slot children go in `CHILD_OVERRIDES`.
+- **`SLOT_INSERTIONS`** — when the example places content into a slot, build `{ slotName, componentNodeId, nestedOverrides?, textOverrides? }`. Resolve `slotName` against `render-meta.slotContents[].slotName` and `componentNodeId` against `render-meta.slotContents[].preferredComponents[].componentId`. Use `[]` when the example needs no slot population.
+- **`TEXT_OVERRIDES`** — any literal text the example shows that differs from the component's default text, keyed by the **live TEXT layer name** discovered by the whitelisted read below. Use `{}` when the example shows no custom text.
+
+**WHITELISTED MINIMAL LIVE READ (the ONLY Figma read this skill makes beyond rendering).** To set preview text on the configuration-example instances, you may run **one** read-only `figma_execute` / `use_figma` script that lists the TEXT nodes on `COMP_SET_ID` (`render-meta.component.compSetNodeId`) ONLY, to learn the live TEXT layer names (`textNodeMap`) and key your `TEXT_OVERRIDES` against them. This read is strictly bounded:
+- **TEXT-node listing only** — return `{ name, characters }` for TEXT nodes on the default variant of `COMP_SET_ID`. Do NOT walk the component tree, do NOT read property definitions, variant axes, booleans, slots, variable collections, or ownership — that is property re-extraction and is FORBIDDEN (Step 0).
+- **`<= 30` lines** of script. If you cannot express the listing in 30 lines, you are doing too much — trim it back to the TEXT-node names.
+- **No layer-name guessing.** `TEXT_OVERRIDES` keys MUST come from this listing (or from `render-meta.propertyDefs[].associatedLayerName` where it already names the text layer). Never invent or infer a layer name.
 
 ```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
-
-const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
-  return { error: 'Node is not a component set or component. Type: ' + (node ? node.type : 'null') };
-}
-
-const isComponentSet = node.type === 'COMPONENT_SET';
-const propDefs = node.componentPropertyDefinitions;
-const variantAxes = [];
-const booleanProps = [];
-const instanceSwapProps = [];
-const slotProps = [];
-const relevantVariableCollections = [];
-const ownershipHints = [];
-
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  const cleanKey = rawKey.split('#')[0];
-  if (def.type === 'VARIANT') {
-    variantAxes.push({
-      name: cleanKey,
-      options: def.variantOptions || [],
-      defaultValue: def.defaultValue
-    });
-    ownershipHints.push({
-      propertyName: cleanKey,
-      evidenceType: 'rootVariant',
-      sourceNodeName: node.name,
-      sourceLayerName: null,
-      suggestedExposure: 'parent',
-      rationale: 'Defined on the component set as a variant axis.'
-    });
-  } else if (def.type === 'BOOLEAN') {
-    let associatedLayer = null;
-    const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-    const props = defaultVariant.componentProperties;
-    if (props) {
-      for (const [k, v] of Object.entries(props)) {
-        if (k.split('#')[0] === cleanKey && v.type === 'BOOLEAN') {
-          const nodeId = k.split('#')[1];
-          if (nodeId) {
-            try {
-              const layerNode = await figma.getNodeByIdAsync(defaultVariant.id.split(';')[0] + ';' + nodeId);
-              if (layerNode) associatedLayer = layerNode.name;
-            } catch {}
-          }
-        }
-      }
-    }
-    booleanProps.push({
-      name: cleanKey,
-      defaultValue: def.defaultValue,
-      associatedLayer,
-      rawKey
-    });
-    ownershipHints.push({
-      propertyName: cleanKey,
-      evidenceType: 'rootBoolean',
-      sourceNodeName: node.name,
-      sourceLayerName: associatedLayer,
-      suggestedExposure: associatedLayer ? 'parent_or_child' : 'parent',
-      rationale: associatedLayer
-        ? 'Defined on the root component but associated with a specific layer or child.'
-        : 'Defined directly on the root component.'
-    });
-  } else if (def.type === 'INSTANCE_SWAP') {
-    let swapTargetName = null;
-    if (def.defaultValue) {
-      try {
-        const targetNode = await figma.getNodeByIdAsync(def.defaultValue);
-        if (targetNode) swapTargetName = targetNode.name;
-      } catch {}
-    }
-    instanceSwapProps.push({
-      name: cleanKey,
-      defaultValue: swapTargetName || def.defaultValue,
-      rawKey
-    });
-    ownershipHints.push({
-      propertyName: cleanKey,
-      evidenceType: 'rootInstanceSwap',
-      sourceNodeName: node.name,
-      sourceLayerName: null,
-      suggestedExposure: 'parent',
-      rationale: 'Defined on the root component as an instance swap.'
-    });
-  } else if (def.type === 'SLOT') {
-    const preferred = [];
-    if (def.preferredValues && def.preferredValues.length > 0) {
-      for (const pv of def.preferredValues) {
-        if (pv.type === 'COMPONENT') {
-          let compName = null;
-          try {
-            const comp = await figma.getNodeByIdAsync(pv.key);
-            if (comp) compName = comp.name;
-          } catch {}
-          preferred.push({ componentKey: pv.key, componentName: compName || pv.key });
-        }
-      }
-    }
-    slotProps.push({
-      name: cleanKey,
-      description: def.description || '',
-      preferredInstances: preferred,
-      rawKey,
-      defaultChildren: []
-    });
-    ownershipHints.push({
-      propertyName: cleanKey,
-      evidenceType: 'rootSlot',
-      sourceNodeName: node.name,
-      sourceLayerName: null,
-      suggestedExposure: 'parent',
-      rationale: 'Defined on the root component as a slot selector.'
-    });
-  }
-}
-
-const defaultVariant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-const defaultProps = { ...(defaultVariant.variantProperties || {}) };
-
-// Read default children of SLOT nodes for contextual overrides
-if (slotProps.length > 0) {
-  const allSlotNodes = defaultVariant.findAll ? defaultVariant.findAll(n => n.type === 'SLOT') : [];
-  for (const slotNode of allSlotNodes) {
-    const cpRefs = slotNode.componentPropertyReferences || {};
-    const matchingSlot = slotProps.find(sp => {
-      const refKey = Object.values(cpRefs)[0];
-      if (refKey && refKey.split('#')[0] === sp.name) return true;
-      return sp.name === slotNode.name;
-    });
-    if (matchingSlot && slotNode.children) {
-      for (const child of slotNode.children) {
-        if (child.type === 'INSTANCE') {
-          const mainComp = await child.getMainComponentAsync();
-          const overrides = {};
-          if (child.componentProperties) {
-            for (const [k, v] of Object.entries(child.componentProperties)) {
-              overrides[k.split('#')[0]] = v.value;
-            }
-          }
-          matchingSlot.defaultChildren.push({
-            componentName: mainComp ? mainComp.name : child.name,
-            componentKey: mainComp ? mainComp.key : '',
-            contextualOverrides: overrides
-          });
-        }
-      }
-    }
-  }
-}
-
-// Read composable children for components that don't use native SLOT nodes
-const composableChildren = [];
-if (slotProps.length === 0 && defaultVariant.children) {
-  for (const child of defaultVariant.children) {
-    if (child.type === 'INSTANCE') {
-      const mainComp = await child.getMainComponentAsync();
-      const overrides = {};
-      if (child.componentProperties) {
-        for (const [k, v] of Object.entries(child.componentProperties)) {
-          overrides[k.split('#')[0]] = v.value;
-        }
-      }
-      composableChildren.push({
-        componentName: mainComp ? mainComp.name : child.name,
-        componentKey: mainComp ? mainComp.key : '',
-        contextualOverrides: overrides
-      });
-      for (const key of Object.keys(overrides)) {
-        ownershipHints.push({
-          propertyName: key,
-          evidenceType: 'childOverride',
-          sourceNodeName: mainComp ? mainComp.name : child.name,
-          sourceLayerName: child.name,
-          suggestedExposure: 'child_or_parent',
-          rationale: 'Observed as a contextual override on a fixed child instance.'
-        });
-      }
-    } else if (child.children) {
-      for (const grandchild of child.children) {
-        if (grandchild.type === 'INSTANCE') {
-          const mainComp = await grandchild.getMainComponentAsync();
-          const overrides = {};
-          if (grandchild.componentProperties) {
-            for (const [k, v] of Object.entries(grandchild.componentProperties)) {
-              overrides[k.split('#')[0]] = v.value;
-            }
-          }
-          composableChildren.push({
-            componentName: mainComp ? mainComp.name : grandchild.name,
-            componentKey: mainComp ? mainComp.key : '',
-            contextualOverrides: overrides,
-            parentLayer: child.name
-          });
-          for (const key of Object.keys(overrides)) {
-            ownershipHints.push({
-              propertyName: key,
-              evidenceType: 'childOverride',
-              sourceNodeName: mainComp ? mainComp.name : grandchild.name,
-              sourceLayerName: child.name,
-              suggestedExposure: 'child_or_parent',
-              rationale: 'Observed as a contextual override on a nested child instance.'
-            });
-          }
-        }
-      }
-    }
-  }
-}
-
-const variantAxesObj = {};
-if (isComponentSet && node.variantGroupProperties) {
-  for (const [key, val] of Object.entries(node.variantGroupProperties)) {
-    variantAxesObj[key] = val.values;
-  }
-}
-
-const textNodeMap = [];
-const allTextNodes = defaultVariant.findAll ? defaultVariant.findAll(n => n.type === 'TEXT') : [];
-for (const tn of allTextNodes) {
-  textNodeMap.push({
-    name: tn.name,
-    characters: tn.characters,
-    parentName: tn.parent ? tn.parent.name : null
-  });
-  ownershipHints.push({
-    propertyName: tn.name,
-    evidenceType: 'textNode',
-    sourceNodeName: node.name,
-    sourceLayerName: tn.parent ? tn.parent.name : null,
-    suggestedExposure: 'child_or_parent',
-    rationale: 'Observed as visible text in the default variant.'
-  });
-}
-
-const componentWords = node.name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-const collections = await figma.variables.getLocalVariableCollectionsAsync();
-for (const collection of collections) {
-  const nameLower = collection.name.toLowerCase();
-  const matchesComponentName = componentWords.some(w => w.length > 2 && nameLower.includes(w));
-  const matchesGenericProperty = /(density|shape|size|spacing|radius|tone|color|state|variant)/i.test(collection.name);
-  if (!matchesComponentName && !matchesGenericProperty) continue;
-  relevantVariableCollections.push({
-    name: collection.name,
-    modes: collection.modes.map(mode => mode.name)
-  });
-  ownershipHints.push({
-    propertyName: collection.name,
-    evidenceType: 'variableMode',
-    sourceNodeName: node.name,
-    sourceLayerName: null,
-    suggestedExposure: 'parent',
-    rationale: 'Relevant variable collection with multiple modes that may affect the component contract.'
-  });
-}
-
-return {
-  componentName: node.name,
-  compSetNodeId: TARGET_NODE_ID,
-  isComponentSet,
-  variantAxes,
-  booleanProps,
-  instanceSwapProps,
-  slotProps,
-  composableChildren,
-  relevantVariableCollections,
-  ownershipHints,
-  variantAxesObj,
-  defaultProps,
-  defaultVariantName: defaultVariant.name,
-  textNodeMap
-};
+const COMP_SET_ID = '__COMP_SET_NODE_ID__';
+const node = await figma.getNodeByIdAsync(COMP_SET_ID);
+let _p = node; while (_p.parent && _p.parent.type !== 'DOCUMENT') _p = _p.parent;
+if (_p.type === 'PAGE') await figma.setCurrentPageAsync(_p);
+const variant = node.type === 'COMPONENT_SET' ? (node.defaultVariant || node.children[0]) : node;
+const textNodes = variant.findAll ? variant.findAll(n => n.type === 'TEXT') : [];
+return textNodes.map(tn => ({ name: tn.name, characters: tn.characters }));
 ```
 
-Save the returned JSON. This provides:
-- `compSetNodeId` — needed for creating live preview instances in configuration examples (Step 12)
-- `variantAxes` — each axis with `name`, `options`, and `defaultValue` for populating the main property table
-- `booleanProps` — each boolean with `name`, `defaultValue`, `associatedLayer`, and `rawKey` (the exact Figma key including `#nodeId` suffix for `setProperties()`)
-- `instanceSwapProps` — each instance swap with `name`, `defaultValue`, and `rawKey`
-- `slotProps` — each native SLOT property with `name`, `description`, `preferredInstances` (approved components for the slot), and `defaultChildren` (instances found in the slot with their `contextualOverrides` — property values set by the designer that may differ from the component's standalone defaults)
-- `composableChildren` — for components that don't use native SLOT nodes: child INSTANCE nodes found in the default variant, each with `componentName`, `componentKey`, `contextualOverrides`, and optional `parentLayer` (the containing frame name). Empty when `slotProps` is populated.
-- `relevantVariableCollections` — variable collections whose names suggest they may affect the component (for example component-specific shape/density collections or global density collections), each with `name` and `modes`
-- `ownershipHints` — deterministic ownership cues gathered from root properties, child overrides, text nodes, and variable collections. These are hints for reasoning, not the final API ownership decision.
-- `defaultProps` — default variant property values for variant matching in configuration examples
-- `defaultVariantName` — for fallback identification
-- `textNodeMap` — array of `{ name, characters, parentName }` for every TEXT node in the default variant. Use the `name` field (not `parentName`) as the key in `textOverrides` and `slotInsertions[].textOverrides`. This eliminates guessing layer names from frame structure or design context output. Layer names are case-sensitive.
+Skip this read entirely when no configuration example sets custom preview text.
 
-Use this structured data in Step 5 to identify properties deterministically rather than relying solely on MCP tool interpretation. These fields are **facts**, not the final API. Do not copy raw Figma structures through verbatim when the engineer-facing API should be more semantic. When building sub-component tables (Pattern A or B), use `slotProps.defaultChildren.contextualOverrides` or `composableChildren.contextualOverrides` to populate the `default` column with context-specific values rather than the component's global defaults.
+There is no Step 6 — the property contract (Properties table, sub-component tables, configuration examples, referenced components) is already authored in the `.md` and assembled in Step 4. Do not re-run the property-identification reasoning (variant decomposition, override-promotion pass, variable-mode classification, ownership/nesting decisions, sub-component pattern selection). That pass is deleted (see Step 0 FORBIDDEN).
 
-When building configuration examples (Step 12), use `slotProps` to populate `slotInsertions`: the slot name comes from `slotProps[].name` (e.g., `"trailing content slot"`), and the `componentNodeId` comes from the preferred instance node IDs discovered during Step 4 context gathering (e.g., the node IDs returned for trailing preferred instances). Use `textOverrides` for any text values shown in the example table that differ from the component's default text — look up the exact TEXT node layer name from `textNodeMap` (e.g., if `textNodeMap` shows `{ name: "section heading", characters: "Section heading", parentName: "title" }`, use `"section heading"` as the key, not `"title"`).
+### Step 7: Audit the assembled render inputs
 
-### Step 4c: Build Working Evidence Set
+Before rendering, verify the inputs you built from the `.md` (do NOT re-audit the property contract — that was decided in `create-component-md`):
+- Every `PROPERTIES` / sub-component row's `property`, `values`, `default`, and `notes` match the `.md` table cells verbatim — no normalization of capitalization or punctuation, no invented rows.
+- Every `required` flag follows the `default`-cell rule (empty/absent default ⇒ `Yes`), and every `isSubProperty` flag follows the `"Only meaningful when …"` Notes prose. No `isSubProperty` row was promoted/demoted by re-reasoning.
+- Each `CONFIG_EXAMPLES` entry's `EXAMPLE_PROPERTIES` come from its `code` string, and its `VARIANT_PROPS` / `CHILD_OVERRIDES` keys are real `render-meta.propertyDefs` raw keys (not human names). `SLOT_INSERTIONS[].componentNodeId` resolves to a `render-meta.slotContents[].preferredComponents[].componentId`.
+- Every `TEXT_OVERRIDES` key came from the whitelisted TEXT-node listing (or `render-meta.propertyDefs[].associatedLayerName`) — none were guessed.
+- `COMP_SET_ID`, `propertyDefs`, `booleanDefs`, and `slotContents` come from `render-meta` — not from any live property extraction.
+- You did NOT run an extraction/tree-walk or re-identify properties (see Step 0 FORBIDDEN).
 
-Before reasoning about the API, assemble a working evidence set from Step 4 and Step 4b. Keep deterministic evidence separate from interpretation.
-
-Your working evidence set should include:
-- raw variant axes and values,
-- raw boolean, enum, slot, and instance-swap properties,
-- relevant variable collections and modes,
-- fixed child or slot child composition with contextual overrides,
-- text node names and default strings,
-- ownership hints collected from root definitions, child overrides, text nodes, and variable collections,
-- user-provided context and screenshots,
-- any observed evidence that a child-level capability affects the parent component contract.
-
-Use this evidence set to answer two questions before writing the API:
-1. What facts can be stated directly from Figma?
-2. What API decisions require AI reasoning and normalization?
-
-Facts should come from deterministic evidence. Interpretation should happen in Step 5 using the instruction file.
-The working evidence set should be represented as a structured object matching the `ComponentEvidence` schema in the instruction file before you generate `ApiOverviewData`.
-
-### Step 5: Identify Properties
-
-Using gathered context and the extraction data from Step 4b, identify:
-
-**A. Variant properties** from Figma axes (size, type, hierarchy, layout, behavior, etc.)
-- If a broad axis mixes transient and persistent states, decompose it into engineer-friendly API properties instead of copying the axis verbatim.
-- Drop transient interaction visuals such as hovered, pressed, and focused unless the component clearly exposes them as persistent configuration.
-
-**B. Boolean toggles** from instance inspection
-- Separate simple modifiers (`isDisabled`, `showBadge`) from slot-selection booleans that should become enums with `none`.
-- Check whether a child-level toggle actually changes the parent component contract. If it does, promote it to the parent API.
-
-**Mandatory: Override Promotion Pass**
-
-For each entry in `composableChildren`, walk every key in `contextualOverrides` and classify it:
-
-| Override key | Does it change what the parent looks like to a consumer? | Action |
-|---|---|---|
-| Yes (e.g., `Leading content`, `Trailing content`, `Character count`) | Promote to parent API as an enum or boolean |
-| No (e.g., `Size` that mirrors the parent's own size axis) | Keep in sub-component table only |
-| Unclear | Ask: would an engineer set this when USING the parent? If yes, promote. |
-
-When a master boolean (`Leading content: true/false`) gates sub-booleans (`Leading artwork`, `Leading text`), merge them into a single enum on the parent API: `leadingContent: none, icon, text, iconAndText`. The master boolean `false` maps to `none`. See the instruction file's "Figma master boolean + sub-boolean trap" for the full pattern.
-
-Do not skip this pass. The most common failure mode is leaving child-level capabilities buried in sub-component tables when they belong on the parent API.
-
-**C. Variable mode properties** from variable collections and modes
-- Treat density, shape, and similar mode-controlled properties as first-class API inputs when they materially affect the component.
-- Do not omit variable modes just because they are controlled at the container level.
-
-**D. Ownership and nesting decisions**
-- Decide whether each property belongs on the parent API, in a sub-component table, or in both places.
-- Use the parent API for properties that affect the component's external contract, behavior, or common usage.
-- Use sub-component tables for implementation/configuration details of nested children.
-- Use `isSubProperty` when a property is best understood as part of a parent capability rather than a standalone top-level row.
-
-**E. Sub-component configurations** (Pattern A: slot content types; Pattern B: fixed sub-components — see instruction file for decision criteria)
-- Check both fixed children and interchangeable slot content types.
-- For compound components, prefer documenting the user-facing contract on the parent and the child-specific mechanics in the sub-component tables.
-
-### Step 6: Generate Structured Data
-
-Follow the `ApiOverviewData` schema defined in the instruction file. Build the data as a structured object matching those interfaces.
-
-Before finalizing the object, mentally separate:
-- deterministic facts: what Figma proves,
-- semantic API decisions: how those facts should be exposed to engineers.
-
-Prefer deterministic extraction for facts and AI reasoning for interpretation. Do not ask the model to infer facts that can be gathered directly from Figma. Do not hard-code semantic API decisions into scripts when those decisions require cross-component judgment.
-
-### Step 7: Audit
-
-Re-read the instruction file, focusing on:
-- **Pre-Output Validation Checklist** — walk through each checkbox
-- **Common Mistakes** section
-- **Do NOT** section
-- **Property Naming** conventions (camelCase, engineer-friendly)
-
-Check your output against each rule. Fix any violations.
-
-During the audit, explicitly verify:
-- every semantic claim is backed by deterministic evidence or is clearly marked as an inference,
-- broad Figma structures have been normalized into an engineer-friendly API,
-- parent-level properties have not been buried inside sub-component tables,
-- nested properties use `isSubProperty` only when the relationship is clear and meaningful.
+Fix any mismatch by re-parsing the `.md` — never by re-extracting from Figma.
 
 ### Step 8: Import and Detach Template
 
-Run via `figma_execute` (replace `__API_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL):
+Run via `figma_execute` (replace `__API_TEMPLATE_KEY__` with `API_TEMPLATE_KEY`, `__COMPONENT_NAME__` with the `.md` component name, and `__COMPONENT_NODE_ID__` with `render-meta.component.compSetNodeId`):
 
 ```javascript
 const TEMPLATE_KEY = '__API_TEMPLATE_KEY__';
@@ -758,12 +455,13 @@ return { success: true };
 
 Run **one `figma_execute` call per configuration example** to avoid timeouts.
 
-For each example, run (replace `__FRAME_ID__`, `__EXAMPLE_TITLE__`, `__COMPONENT_SET_NODE_ID__`, `__VARIANT_PROPERTIES_JSON__`, `__CHILD_OVERRIDES_JSON__`, `__TEXT_OVERRIDES_JSON__`, `__SLOT_INSERTIONS_JSON__`, and `__EXAMPLE_PROPERTIES_JSON__`):
+For each example, run (replace `__FRAME_ID__`, `__EXAMPLE_TITLE__`, `__COMPONENT_SET_NODE_ID__` with `render-meta.component.compSetNodeId`, and the JSON placeholders with the values projected in Step 5). All inputs below come from the Step 5 projection of the example's `code` string through `render-meta` — **not** from a live extraction:
 
-- `__VARIANT_PROPERTIES_JSON__` is an object mapping **Figma property keys** (exactly as returned by `componentPropertyDefinitions`) to values. This is used to instantiate and configure the live component preview. Include variant axes and boolean toggles needed for the example.
-- `__CHILD_OVERRIDES_JSON__` is an array of per-child property override objects for composable slot children (index 0 = first child). Use `[]` when no child overrides are needed. Each entry maps Figma property keys to values, same format as `variantProperties`.
-- `__TEXT_OVERRIDES_JSON__` is an object mapping **Figma layer names** to new text content (e.g., `{ "Label": "Submit" }`). Applied to TEXT nodes inside the main instance. Use `{}` when no text overrides are needed.
-- `__SLOT_INSERTIONS_JSON__` is an array of slot insertion objects. Each has `slotName` (SLOT node name), `componentNodeId` (local component node ID to instantiate), and optional `nestedOverrides` (component properties for `setProperties()`) and `textOverrides` (TEXT node content overrides on the inserted child). All overrides are applied **before** `appendChild` into the slot — after adoption, the child's internal nodes get compound IDs and become inaccessible. Use `[]` when no slot insertions are needed.
+- `__VARIANT_PROPERTIES_JSON__` is an object mapping **raw component-property keys** (the `render-meta.propertyDefs` keys, e.g. `"clear button#10225:1"`) to values — the projection of the example's human prop names from Step 5. This instantiates and configures the live preview. Include the variant axes and boolean toggles the example sets.
+- `__CHILD_OVERRIDES_JSON__` is an array of per-child property override objects for composable slot children (index 0 = first child). Use `[]` when no child overrides are needed. Each entry maps raw `render-meta.propertyDefs` keys to values, same format as `VARIANT_PROPS`.
+- `__TEXT_OVERRIDES_JSON__` is an object mapping **live TEXT layer names** (from the Step 5 whitelisted TEXT-node listing, or `render-meta.propertyDefs[].associatedLayerName`) to new text content (e.g., `{ "Label": "Submit" }`). Applied to TEXT nodes inside the main instance. Use `{}` when no text overrides are needed. Never guess layer names.
+- `__SLOT_INSERTIONS_JSON__` is an array of slot insertion objects. Each has `slotName` (`render-meta.slotContents[].slotName`), `componentNodeId` (`render-meta.slotContents[].preferredComponents[].componentId`), and optional `nestedOverrides` (component properties for `setProperties()`) and `textOverrides` (TEXT node content overrides on the inserted child). All overrides are applied **before** `appendChild` into the slot — after adoption, the child's internal nodes get compound IDs and become inaccessible. Use `[]` when no slot insertions are needed.
+- `__EXAMPLE_PROPERTIES_JSON__` is the example table rows `{ property, value, notes }` parsed from the example's `code` string in Step 5 (human-readable names, verbatim).
 
 ```javascript
 const FRAME_ID = '__FRAME_ID__';
@@ -958,16 +656,20 @@ return { success: true };
 
 ### Step 14: Completion Link
 
-Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID:
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (`render-meta.fileKey`) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID. Append the `sourceHash` from `render-meta` as a provenance footer so readers can detect drift between this render and the `_base.json` that produced the `.md`:
 
 ```
 API spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
+Source: {mdPath} (render-meta sourceHash {sourceHash})
 ```
 
 ## Notes
 
-- Conditional sub-components: If `subComponentTables` is empty or absent, the `#subcomponent-chapter-template` is hidden. If present, each sub-component gets its own cloned section with its own property table.
-- Hierarchy indicators: Both the main table (`#hierarchy-indicator`) and sub-component tables (`#subprop-hierarchy-indicator`) support `isSubProperty` for indented child rows.
-- The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, there are no variant axes — only boolean, instance swap, and variable mode properties apply. Instance creation in Step 12 uses `compNode.createInstance()` directly for standalone components.
-- The extraction script (Step 4b) programmatically reads `componentPropertyDefinitions` from the component set or component, capturing all variant axes (with options and defaults), boolean toggles (with associated layer names and raw keys), and instance swap properties. This structured data makes property identification in Step 5 deterministic rather than relying solely on LLM interpretation of MCP tool output. The `rawKey` values (including `#nodeId` suffixes) are needed for `setProperties()` when creating configuration example previews in Step 12.
-- The instruction file (`{{ref:api/agent-api-instruction.md}}`) contains the JSON schema, examples, and property classification rules. The AI reasoning for property identification is unchanged — only the delivery mechanism has changed.
+- **This skill consumes the component `.md`** (the source of truth produced by {{skill:create-component-md}}) and renders its API section into Figma. It does NOT extract from Figma and does NOT re-identify properties — see the Step 0 FORBIDDEN directive. The `compSetNodeId`, `propertyDefs` raw keys, `booleanDefs`, `slotContents`, `fileKey`, `nodeId`, and `sourceHash` all come from the `.md`'s `render-meta` block.
+- Conditional sub-components: If the `.md` has no sub-component tables (and no referenced-components block), the `#subcomponent-chapter-template` is hidden. If present, each sub-component / referenced component gets its own cloned section with its own property table.
+- Hierarchy indicators: Both the main table (`#hierarchy-indicator`) and sub-component tables (`#subprop-hierarchy-indicator`) support `isSubProperty` for indented child rows. `isSubProperty` is re-derived in Step 5 from the `"Only meaningful when {parentProperty} = {triggerValue}. …"` Notes prose authored in the `.md` — never by re-reasoning about ownership.
+- `required` is re-derived in Step 5 from the `.md`'s `Default` cell (empty/absent default ⇒ required), not from a live read.
+- The target node referenced by `render-meta.component.compSetNodeId` can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). Instance creation in Step 12 handles both via `compNode.type === 'COMPONENT_SET' ? (defaultVariant || children[0]) : compNode`.
+- **Configuration-example previews** are configured by projecting each example's fenced `code` string through `render-meta.propertyDefs` raw keys (Step 5): the human prop names in the example map to the raw component-property keys (including `#nodeId` suffixes) that `setProperties()` expects. Slot insertions resolve through `render-meta.slotContents[].preferredComponents[].componentId`.
+- **The single whitelisted live read** is the bounded `<= 30-line` TEXT-node listing on `render-meta.component.compSetNodeId` (Step 5), used only to learn live TEXT layer names for `TEXT_OVERRIDES`. It MUST NOT walk the tree or read property definitions — that is property re-extraction and is FORBIDDEN.
+- The instruction file (`{{ref:api/agent-api-instruction.md}}`) is consulted **only** for the `isSubProperty` Notes-prose convention and the configuration-example projection (Step 1) — not to re-run property identification. Property identification already happened in `extract-api` / `create-component-md` and is baked into the `.md`.

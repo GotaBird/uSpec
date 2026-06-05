@@ -42,6 +42,7 @@ const schema = {
         nodeId: { type: 'string', minLength: 1 },
         componentSlug: { type: 'string', minLength: 1 },
         optionalContext: { type: ['string', 'null'] },
+        figmaUrl: { type: ['string', 'null'] },
         extractionSource: { enum: ['plugin', 'mcp'] },
         pluginVersion: { type: 'string' },
       },
@@ -218,7 +219,25 @@ export async function validateBaseFile(filePath) {
   } catch (err) {
     return { ok: false, errors: [{ message: `Invalid JSON: ${err.message}` }] };
   }
-  return validateBase(parsed);
+  const result = validateBase(parsed);
+  // Transport-safety guard: literal U+2028/U+2029 must never reach the file (the
+  // plugin's safeStringify escapes them). The Ajv schema operates on parsed data
+  // and cannot see them, so check the raw bytes here.
+  const lineSep = (raw.match(/\u2028/g) || []).length;
+  const paraSep = (raw.match(/\u2029/g) || []).length;
+  if (lineSep || paraSep) {
+    return {
+      ok: false,
+      errors: [
+        ...result.errors,
+        {
+          instancePath: '(file)',
+          message: `contains ${lineSep} literal U+2028 and ${paraSep} literal U+2029 character(s); these must be \\u-escaped (regression in safeStringify)`,
+        },
+      ],
+    };
+  }
+  return result;
 }
 
 // CLI entrypoint.

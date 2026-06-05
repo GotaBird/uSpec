@@ -54,7 +54,7 @@ Task Progress:
 - [ ] Step 2.5: Load API dictionary (canonical vocabulary) — optional
 - [ ] Step 3: Build working evidence set (elements, slotDefs, slotVisibility from _base.json)
 - [ ] Step 3-delta: OPTIONAL — read-only Figma call if a fact is genuinely missing
-- [ ] Step 4: Visual parts, merge analysis, focus stops, states, slot scenarios
+- [ ] Step 4: Visual parts, merge analysis, focus stops (+ retain layerName per stop), states, slot scenarios
 - [ ] Step 5: Generate VoiceSpecData (guidelines, focusOrder, states with 3 platform sections)
 - [ ] Step 6: Audit (re-read instruction file)
 - [ ] Step 7: Write JSON to cache and return one-line summary
@@ -192,6 +192,8 @@ Using evidence from Step 3:
 
 **F. State-to-variant mapping.** Using `variantAxes`, map each documented state to `{ [axisName]: value }`. Match state names to variant axis options (case-insensitive). When a state name matches an option on a variant axis, set that axis to the matching value; leave other axes at defaults. When no match (e.g., behavioral state "focused"), use the default variant properties. Save as `stateVariantProps`. In parallel, carry `slotInsertions` into state objects that need slot population beyond defaults.
 
+**G. Retain the Figma layer name per focus stop.** Every focus stop is derived (during the merge analysis in B/C) from one `treeFlat` element. Record that element's `name` as the focus stop's `layerName`, and copy its `slotIndex` when present. `layerName` is the **live Figma layer name** — distinct from the human-readable focus-stop `name` (e.g., layer `"input"` vs. part name `"Input field"`). It is carried through to the `.md` so `create-voice`'s renderer can name-match each focus marker to the live instance exactly (`findStopNode` matches `node.name === stop.layerName`). Never synthesize `layerName`; copy it verbatim from the matched `elements[]` entry. When a focus stop cannot be tied to a `treeFlat` element (rare — e.g., a purely behavioral container with no node), set `layerName: null` and note it; the renderer will skip the marker rather than mis-place it.
+
 ### Step 5: Generate `VoiceSpecData`
 
 Follow the schema in the instruction file. Build the data as:
@@ -201,7 +203,7 @@ Follow the schema in the instruction file. Build the data as:
 - `focusOrder`: object (optional, only when 2+ focus stops):
   - `title`: exactly `"Focus order"`
   - `description`: string (optional)
-  - `tables`: array, each with `name`, `announcement`, `properties: { property, value, notes }[]`, `focusOrderIndex` (1-based reading order)
+  - `tables`: array, each with `name`, `announcement`, `properties: { property, value, notes }[]`, `focusOrderIndex` (1-based reading order), `layerName` (Figma layer name from Step 4.G, or `null`), `slotIndex` (optional, from Step 4.G)
   - `slotInsertions`: `SlotInsertion[]` (optional) — slot population plan for the Focus Order preview
   - `variantPropsForRichestPreview`: `Record<string, string>` (optional) — variant axis values that naturally show the most focus stops in a single preview
 - `states`: array, each with:
@@ -211,7 +213,9 @@ Follow the schema in the instruction file. Build the data as:
   - `slotInsertions`: `SlotInsertion[]` (optional)
   - `sections`: array of exactly 3 platform sections:
     - `title`: one of `"VoiceOver (iOS)"`, `"TalkBack (Android)"`, `"ARIA (Web)"` — exact strings
-    - `tables`: array, one per focus stop / component part, each with `name`, `announcement`, `focusOrderIndex`, `properties: { property, value, notes }[]`
+    - `tables`: array, one per focus stop / component part, each with `name`, `announcement`, `focusOrderIndex`, `layerName` (Figma layer name from Step 4.G, or `null`), `slotIndex` (optional), `properties: { property, value, notes }[]`
+
+**`layerName` is mandatory on every focus-stop table** (focus order + per-state). It is the single field `create-voice` uses to resolve the marker to the live Figma layer, so it must round-trip into the `.md` (see the Voice body's hidden focus-stop carry in `agent-component-md-instruction.md`). A table whose focus stop genuinely has no backing node carries `layerName: null`.
 
 `SlotInsertion`: `{ slotName, componentNodeId, nestedOverrides?, textOverrides? }`. `componentNodeId` may point to a local `COMPONENT` or `COMPONENT_SET`; when a set, instantiate its default variant. Apply all overrides **before** `appendChild` into the slot.
 
@@ -226,6 +230,7 @@ Run **every** check below against your assembled `VoiceSpecData`. An unchecked b
 ```
 - [ ] Every state has exactly 3 platform sub-sections: VoiceOver (iOS), TalkBack (Android), ARIA (Web)
 - [ ] Every focus stop has focusOrderIndex set, starting at 1 and matching reading-order position
+- [ ] Every focus-stop table (focus order + per-state) carries `layerName` copied verbatim from a `treeFlat` element (or `null` with a note when no backing node exists) — never synthesized
 - [ ] No merged / decorative / live-region part is listed as a focus stop
 - [ ] Section titles match verbatim: "Focus order", "VoiceOver (iOS)", "TalkBack (Android)", "ARIA (Web)"
 - [ ] Behavioral states are backed by optionalContext or well-established platform defaults (never invented)

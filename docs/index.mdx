@@ -1,17 +1,17 @@
 ---
 title: "Introduction"
-description: "Generate design system documentation for any Figma component. Render it directly into Figma, or export a portable .md spec for any LLM"
+description: "Generate design system documentation for any Figma component. Produce a portable .md spec, then render it into Figma as annotation frames."
 ---
 
 <Note>
-**uSpec 2.0 is here.** Added new skill create-component-md. Bring your pixel-perfect Figma component to your favorite LLM. [Read the article about Component.md →](https://ianguisard.substack.com/p/componentmd)
+**uSpec now runs on the uSpec Extract plugin.** Every spec starts from a Component Markdown file the plugin produces — it saves thousands of tokens per run and captures more component detail than live extraction. [See the Component Markdown guide →](/specs/component-md)
 </Note>
 
 <Frame>
   <img src="/images/cover.png" alt="uSpec: design system documentation for Figma components" />
 </Frame>
 
-uSpec turns your Figma components into structured documentation from your AI agent. Pick a component, a skill analyzes it, and the output lives either in Figma as annotation frames or on disk as a single `.md` spec you can take anywhere.
+uSpec turns your Figma components into structured documentation from your AI agent. The **uSpec Extract** plugin captures your component, `create-component-md` turns that capture into a single `.md` spec you can take anywhere, and the `create-*` skills render that spec into Figma as annotation frames.
 
 Works with **Cursor**, **Claude Code**, and **Codex**.
 
@@ -25,7 +25,7 @@ Works with **Cursor**, **Claude Code**, and **Codex**.
 
 ## Render into Figma
 
-The original uSpec skills render annotation frames directly into your Figma file, next to the component.
+Once you have a component `.md`, the `create-*` skills render annotation frames directly into your Figma file, next to the component. They read from the `.md` you generated — they no longer re-extract from a Figma link.
 
 <CardGroup cols={3}>
   <Card title="Component Anatomy" icon="crosshairs" href="/specs/anatomy">
@@ -53,16 +53,23 @@ The original uSpec skills render annotation frames directly into your Figma file
 
 ## How it works
 
-uSpec supports two rendering paths from the same source component:
+Every spec flows through one pipeline, with the Component Markdown file at its center:
 
 <Steps>
-  <Step title="Figma-native path">
-    Point the skill at a Figma link. The agent uses the Figma MCP to pull structure, variables, and styles from your file, then renders annotation frames directly in Figma using templates you linked during setup.
+  <Step title="Extract">
+    Run the **uSpec Extract** Figma plugin on your component to produce a `_base.json` capture of every variant, token binding, and sub-component.
   </Step>
-  <Step title="Component Markdown path">
-    Run the **uSpec Extract** Figma plugin to produce a `_base.json` capture of your component, then run `create-component-md` against the JSON. The skill runs four parallel interpretation agents (API, structure, color, voice) and writes a single `.md` specification to disk.
+  <Step title="Generate the .md">
+    Run `create-component-md` against the `_base.json`. It runs four parallel interpretation agents (API, structure, color, voice) and writes a single `.md` specification to disk — your source of truth.
+  </Step>
+  <Step title="Render into Figma (optional)">
+    Point any `create-*` skill at the `.md` to render that section as annotation frames next to the component. These skills read from the `.md`; they do not re-extract from Figma.
   </Step>
 </Steps>
+
+<Note>
+  `create-motion` is the one exception: it renders a timeline from an After Effects export and does not use the Component Markdown pipeline.
+</Note>
 
 ## Get started
 

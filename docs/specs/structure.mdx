@@ -10,14 +10,14 @@ description: "Generate dimensional properties documentation for spacing, padding
 Structure specs document component measurements such as heights, widths, padding, and gaps, and how those values change across variants like density, size, and shape.
 
 <Tip>
-  Structure also ships as part of the [Component Markdown](/specs/component-md) output. Run `create-component-md` when you want API, structure, color, and voice in a single `.md` file instead of a Figma frame.
+  `create-structure` now renders **from the [Component Markdown](/specs/component-md) source of truth**. Run `create-component-md` first to produce `components/<slug>.md`; this skill reads its Structure section + `render-meta` and renders the Figma frame. It no longer re-extracts from Figma, and it fails fast if the `.md` is missing.
 </Tip>
 
 ## What you need
 
-- A **Figma link** to the component
-- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP)
-- Any additional context about density modes, size variants, or specific sub-components to include
+- A **component `.md`** produced by `create-component-md` (run it first — `create-component-md` needs a `_base.json` from the uSpec Extract plugin). Tell the skill where this `.md` lives — `components/<slug>.md` is only `create-component-md`'s default output path; the file can live anywhere. Without it this skill aborts.
+- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP) — used only to render the frame.
+- Context about density modes, size variants, or specific sub-components is captured upstream by `create-component-md`; nothing extra is needed here.
 
 <Tip>
   Tell the agent which variant axes affect dimensions. A button might vary by size, while a list item varies by density. The agent checks both explicit variants and variable mode collections.
@@ -25,31 +25,28 @@ Structure specs document component measurements such as heights, widths, padding
 
 ## How to use
 
-Reference the skill and paste your Figma link. Include context about which parts to measure and how dimensions vary across variants:
+Reference the skill and pass the component `.md`. Add a render destination or any extra context the spec can't carry:
 
 <Tabs>
   <Tab title="Cursor">
     ```
-    @create-structure https://www.figma.com/design/abc123/Components?node-id=100:200
+    @create-structure ./components/list-item.md
 
-    This is a list item with Compact, Default, and Spacious densities. Include
-    container, leading slot, label, and trailing slot dimensions.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Claude Code">
     ```
-    /create-structure https://www.figma.com/design/abc123/Components?node-id=100:200
+    /create-structure ./components/list-item.md
 
-    This is a list item with Compact, Default, and Spacious densities. Include
-    container, leading slot, label, and trailing slot dimensions.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Codex">
     ```
-    $create-structure https://www.figma.com/design/abc123/Components?node-id=100:200
+    $create-structure ./components/list-item.md
 
-    This is a list item with Compact, Default, and Spacious densities. Include
-    container, leading slot, label, and trailing slot dimensions.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
 </Tabs>
@@ -81,31 +78,33 @@ Each section covers a part of the component (container, leading content, labels,
 
 ## How it works
 
-The structure skill uses a two-tier architecture: deterministic scripts handle data extraction and rendering, while AI reasoning focuses on interpretation and planning.
+The structure skill consumes the Component Markdown source of truth: the dimensional values, section plan, and design-intent notes were already decided by `create-component-md`, so deterministic scripts render tables and measurements from the `.md` while AI reasoning is limited to resolving the parsed spec onto live Figma layers.
 
 <Badge color="green" size="sm" shape="pill">60% Deterministic</Badge> <Badge color="purple" size="sm" shape="pill">40% AI Reasoning</Badge>
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Deterministic scripts| C[Figma MCP]
-    C -->|Raw data| D[AI Interpretation]
-    D -->|Section plan| E[Deterministic Render]
-    E -->|Annotation frame| F[Figma Output]
+    A[You] -->|run create-component-md| M["components/&lt;slug&gt;.md"]
+    M -->|Structure section + render-meta| B[create-structure Skill]
+    B -->|Render| C[Figma MCP]
+    C -->|Annotation frame| D[Figma Output]
 ```
 
 <Steps>
-  <Step title="Extract">
-    Deterministic scripts measure dimensions, padding, gaps, token bindings, sub-components, and cross-variant comparisons via the Figma MCP.
+  <Step title="Require the .md">
+    The skill requires `components/<slug>.md` (produced by `create-component-md`) and fails fast if it is missing — it does not re-extract from Figma.
   </Step>
-  <Step title="Interpret">
-    AI builds the section plan, writes design-intent notes, detects anomalies, and judges completeness.
+  <Step title="Parse the Structure section">
+    The skill parses the `.md`'s Structure section (per-section dimension tables, token bindings, design-intent notes) plus the `render-meta` block, which resolves sections, row-groups, and boolean-gated layers back to live Figma layer ids.
+  </Step>
+  <Step title="Build render inputs">
+    Sections, rows, token references, measurement targets, and sub-component anchors are assembled directly from the parsed `.md` and `render-meta` — no live extraction walk.
   </Step>
   <Step title="Import template">
     The structure documentation template is imported from the library, instantiated, and detached into an editable frame.
   </Step>
   <Step title="Render">
-    Deterministic scripts fill tables, place preview instances, and add native Figma measurements.
+    Deterministic scripts fill tables, place preview instances, and add native Figma measurements, locating each target by `render-meta` layer id with a name-match + live bbox fallback on the rendered instance.
   </Step>
   <Step title="Validate">
     A screenshot is captured and checked for completeness. Issues are fixed automatically for up to 3 iterations.
@@ -113,7 +112,7 @@ flowchart LR
 </Steps>
 
 <Note>
-  Roughly 60% of the pipeline is deterministic scripts (extraction, rendering, measurements) and 40% is AI reasoning (section planning, notes, anomaly detection). Output is highly consistent across runs.
+  Roughly 60% of the pipeline is deterministic scripts (parsing the `.md`, rendering tables, measurements) and 40% is AI reasoning (resolving the spec onto live layers, completeness checks). Output is highly consistent across runs.
 </Note>
 
 ## Tips for better output

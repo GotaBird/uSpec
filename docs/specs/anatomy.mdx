@@ -9,6 +9,10 @@ description: "Generate numbered anatomy annotations with attribute tables direct
 
 The anatomy skill documents a component's internal structure — every element gets a numbered marker and an entry in an attribute table.
 
+<Tip>
+  `create-anatomy` now renders **from the [Component Markdown](/specs/component-md) source of truth**. Run `create-component-md` first to produce `components/<slug>.md`; this skill seeds the component's identity from the `.md`'s `render-meta` block and renders the Figma frame. It no longer re-extracts from Figma, and it fails fast if the `.md` is missing.
+</Tip>
+
 ## What you get
 
 <CardGroup cols={2}>
@@ -24,33 +28,38 @@ The skill also generates per-child sections for nested component instances, anno
 
 ## What you need
 
-- A **Figma link** to a component set or standalone component
-- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP)
+- A **component `.md`** produced by `create-component-md` (run it first — `create-component-md` needs a `_base.json` from the uSpec Extract plugin). Tell the skill where this `.md` lives — `components/<slug>.md` is only `create-component-md`'s default output path; the file can live anywhere. Without it this skill aborts.
+- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP) — used only to render the frame.
+- Context about the component is captured upstream by `create-component-md`; nothing extra is needed here.
+
+<Note>
+  Anatomy has no dedicated body section in the `.md`. It seeds the component's identity from the `.md`'s `render-meta` block, then runs a bounded minimal child/variant walk only to position markers and confirm live layer geometry.
+</Note>
 
 ## How to use
 
-Reference the skill and paste your Figma link. Add any context about the component to get richer semantic notes:
+Reference the skill and pass the component `.md`. Add a render destination or any extra context the spec can't carry:
 
 <Tabs>
   <Tab title="Cursor">
     ```
-    @create-anatomy https://www.figma.com/design/abc123/Components?node-id=100:200
+    @create-anatomy ./components/text-field.md
 
-    This is a text field with a leading icon, label, placeholder text, and a trailing clear button.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Claude Code">
     ```
-    /create-anatomy https://www.figma.com/design/abc123/Components?node-id=100:200
+    /create-anatomy ./components/text-field.md
 
-    This is a text field with a leading icon, label, placeholder text, and a trailing clear button.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Codex">
     ```
-    $create-anatomy https://www.figma.com/design/abc123/Components?node-id=100:200
+    $create-anatomy ./components/text-field.md
 
-    This is a text field with a leading icon, label, placeholder text, and a trailing clear button.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
 </Tabs>
@@ -76,31 +85,33 @@ In per-child sections, consecutive identical elements are collapsed into a singl
 
 ## How it works
 
-The anatomy skill splits evenly between deterministic rendering (markers, tables, layout) and AI reasoning (element classification, semantic notes, section decisions).
+The anatomy skill consumes the Component Markdown source of truth: element classification, semantic notes, and per-child section decisions were already made by `create-component-md`, so deterministic scripts render markers and tables from the `.md` while AI reasoning is limited to resolving the seeded model onto live layers.
 
 <Badge color="green" size="sm" shape="pill">50% Deterministic</Badge> <Badge color="purple" size="sm" shape="pill">50% AI Reasoning</Badge>
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Extract data| C[Figma MCP]
-    C -->|Component data| B
-    B -->|Render| C
+    A[You] -->|run create-component-md| M["components/&lt;slug&gt;.md"]
+    M -->|render-meta| B[create-anatomy Skill]
+    B -->|Render| C[Figma MCP]
     C -->|Annotation frame| D[Figma Output]
 ```
 
 <Steps>
-  <Step title="Extract">
-    The skill reads child layers, element types, visibility, and property definitions (booleans, variant axes, instance swaps) from the component via the Figma MCP.
+  <Step title="Require the .md">
+    The skill requires `components/<slug>.md` (produced by `create-component-md`) and fails fast if it is missing — it does not re-extract from Figma.
   </Step>
-  <Step title="Classify and enrich">
-    The agent classifies each element's role (optional slot, fixed sub-component, content element, structural/decorative) and writes semantic notes. It also determines which sub-components warrant their own per-child sections and which should be skipped.
+  <Step title="Seed from render-meta">
+    Anatomy has no dedicated body section, so the skill seeds the component's identity — child layers, element types, visibility, and property definitions (booleans, variant axes, instance swaps) — from the `.md`'s `render-meta` block, then runs a bounded minimal child/variant walk only to confirm live layer geometry.
+  </Step>
+  <Step title="Build render inputs">
+    Element roles, semantic notes, and per-child section decisions are assembled directly from the seeded model and `render-meta` — no full extraction walk.
   </Step>
   <Step title="Import template">
     The anatomy documentation template is imported from the library, instantiated, and detached into an editable frame.
   </Step>
   <Step title="Render">
-    The skill fills header fields, creates a default component instance with hidden elements made visible, positions numbered markers on each element, and builds the attribute table. Per-child sections are created for eligible sub-components.
+    The skill fills header fields, creates a default component instance with hidden elements made visible, positions numbered markers on each element by name-match + live bbox, and builds the attribute table. Per-child sections are created for eligible sub-components.
   </Step>
   <Step title="Validate">
     A screenshot is captured and checked for completeness. Issues are fixed automatically for up to 3 iterations.

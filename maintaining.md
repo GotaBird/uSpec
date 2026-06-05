@@ -145,15 +145,16 @@ You changed something under `packages/cli/src/`. Same flow as above — bump the
 
 ### Editing the Figma plugin (`figma-plugin/`)
 
-The Figma plugin **does not ship in the npm package**. It's a separate artifact installed manually into Figma Desktop. Users get it by cloning the repo and running `npm install && npm run build` inside `figma-plugin/`.
+The Figma plugin **does not ship in the npm package**. It's distributed separately on the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract), where users install it directly — no local build required. The source stays open in `figma-plugin/` for contributors who want to run a modified build locally.
 
 If you change the plugin:
 
 1. Edit files under `figma-plugin/src/`.
-2. Test locally (see `figma-plugin/README.md`).
-3. Commit and push to GitHub. **No npm publish involved.**
+2. Build and test locally (see `figma-plugin/README.md`).
+3. Commit and push to GitHub.
+4. Publish the new version to the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) from Figma Desktop so users get the update. **No npm publish involved** — the Community release is a separate manual step from the npm package.
 
-The npm package is only the AI skills + the install CLI. The plugin and the npm package can drift in version — they're loosely coupled via the `_base.json` schema. If you change the schema, bump both: edit the plugin, then update the validator and any consumer skills (mainly `extract-*` and `create-component-md`), and publish a new npm version.
+The npm package is only the AI skills + the install CLI. The plugin and the npm package can drift in version — they're loosely coupled via the `_base.json` schema. If you change the schema, bump both: edit the plugin and publish it to Community, then update the validator and any consumer skills (mainly `extract-*` and `create-component-md`), and publish a new npm version.
 
 ### Editing docs (`docs/`)
 
@@ -366,7 +367,7 @@ npx --yes uspec-skills@<just-published-version> doctor
 | Add a new skill | New folder under `skills/`, update `implementation.md`/`CLAUDE.md`/`AGENTS.md`, bump, build, publish |
 | Edit CLI behavior | Edit `packages/cli/src/`, bump, build, publish |
 | Edit docs site | Edit `docs/*.mdx`, push to `main`. No publish. |
-| Edit Figma plugin | Edit `figma-plugin/src/`, push to `main`. No publish. |
+| Edit Figma plugin | Edit `figma-plugin/src/`, push to `main`, publish the update to Figma Community. No npm publish. |
 | Roll back a bad publish | Ship a patch. Don't unpublish. |
 | Get out of npx cache jail | Pin the exact version: `npx uspec-skills@<exact> ...` |
 

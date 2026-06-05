@@ -3,6 +3,41 @@ title: "Changelog"
 description: "Product updates and release history"
 ---
 
+<Update label="V2.4 — June 2026" description="The uSpec Extract plugin launches on the Figma Community (no local build), the create-* render skills now consume the Component Markdown source of truth instead of re-extracting from Figma (require the .md, fail fast when missing, treat it as read-only), plus a hidden voice-render-meta focus-stop carry for create-voice — shipping in uspec-skills 0.3.0">
+  ## uSpec V2.4
+
+  The **uSpec Extract plugin is now on the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract)** — no more local build — and the `create-*` render skills now **consume the [Component Markdown](/specs/component-md) source of truth** (`components/<slug>.md`) instead of re-extracting from Figma. Each render skill requires the `.md`, fails fast when it's missing, treats it as read-only, and renders the Figma frame from the `.md` body + its `render-meta` block — with only a small per-skill whitelisted live read. `create-component-md` produces the `.md` from a `_base.json` and remains the single extraction path; the `create-*` skills are now pure renderers.
+
+  ### `create-*` skills consume the Component Markdown
+
+  - **`create-structure`**, **`create-color`**, **`create-api`**, and **`create-voice`** parse their respective section of the `.md` (Structure, Color, API, Voice / Screen reader) plus the shared `render-meta` block, then render the frame. They no longer walk the component through MCP to extract dimensions, tokens, properties, or focus stops — those values are read from the `.md`
+  - **`create-property`** and **`create-anatomy`** have no dedicated `.md` body section, so they take the component's identity from `render-meta`: `create-property` rebuilds the property model (variant axes, boolean defs, variable modes, child component properties) from `render-meta`, and `create-anatomy` seeds element identity from `render-meta` and runs only a bounded minimal child/variant walk to confirm live layer geometry
+  - Every skill **fails fast** if `components/<slug>.md` is absent — there is no silent fallback to re-extraction
+  - Whitelisted per-skill live reads are deliberately minimal: `create-color` calls `getLocalVariableCollectionsAsync()` only to render variable-mode previews, and `create-api` runs a bounded `<=30-line` TEXT-node listing only to source preview text for configuration examples. Markers, measurements, and exhibits resolve by `render-meta` layer id with a name-match (+ live bbox where relevant) fallback on the rendered instance
+
+  ### `voice-render-meta` focus-stop carry (`create-voice`)
+
+  - A hidden `voice-render-meta` block now carries the focus-stop layer-name mapping through the `.md`, so `create-voice` resolves focus markers exactly against the rendered instance instead of re-deriving them by traversal
+
+  ### uSpec Extract plugin on the Figma Community
+
+  - The **uSpec Extract** plugin is now published on the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract). Install it directly from Figma — no cloning the repo and running `npm run build`
+  - The plugin stays **open source** (`figma-plugin/` in the repo) for anyone who wants to read or build a modified version, and it remains **separate from the npm package** — `npx uspec-skills` delivers only the skills, while the plugin lives in Figma Desktop
+  - Because every `create-*` render skill now requires a `.md`, and the `.md` comes from `create-component-md` consuming the plugin's `_base.json`, the plugin is now part of the standard pipeline rather than an optional extra
+
+  ### Read-only input guard on `create-*` skills
+
+  - Every `create-*` skill now treats the input `.md` as **read-only**. A render request like "add a Tap target section" or "show the focus order" renders that annotation into Figma — the skills never edit or append to the source `.md`
+  - This closes a failure mode where a skill could mistake a render request for an instruction to edit the spec file. Changing the spec itself is `create-component-md`'s job
+
+  ### Scope
+
+  - **`create-motion` is unchanged.** It consumes After Effects timeline JSON and never walks a component, so it is out of scope for the Component Markdown consumer model
+  - Already-rendered Figma specs are unaffected — the consumer model only changes future `create-*` runs
+
+  Run `npx uspec-skills update` to pick up the skill changes (this release ships as `uspec-skills` 0.3.0), and install the [uSpec Extract plugin](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) from the Figma Community. No action needed on Figma libraries.
+</Update>
+
 <Update label="V2.3 — May 2026" description="Typed componentProperties snapshot threaded end-to-end through the Figma plugin, SLOT-binding bug fix, and a renderer rewrite that drops the booleanOverrides projection in favor of the typed snapshot for the Referenced components table">
   ## uSpec V2.3
 

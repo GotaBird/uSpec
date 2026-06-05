@@ -10,14 +10,14 @@ description: "Generate accessibility specifications for VoiceOver, TalkBack, and
 Screen reader specs document how assistive technologies should announce and interact with your component across iOS (VoiceOver), Android (TalkBack), and Web (ARIA).
 
 <Tip>
-  Voice also ships as part of the [Component Markdown](/specs/component-md) output. Run `create-component-md` when you want API, structure, color, and voice in a single `.md` file instead of a Figma frame.
+  `create-voice` now renders **from the [Component Markdown](/specs/component-md) source of truth**. Run `create-component-md` first to produce `components/<slug>.md`; this skill reads its Voice section + `render-meta` and renders the Figma frame. It no longer re-extracts from Figma, and it fails fast if the `.md` is missing.
 </Tip>
 
 ## What you need
 
-- A **Figma link** to the component
-- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP)
-- A description of states, behaviors, or interactive parts that aren't visible in the design
+- A **component `.md`** produced by `create-component-md` (run it first — `create-component-md` needs a `_base.json` from the uSpec Extract plugin). Tell the skill where this `.md` lives — `components/<slug>.md` is only `create-component-md`'s default output path; the file can live anywhere. Without it this skill aborts.
+- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP) — used only to render the frame.
+- A description of states/behaviors is captured upstream by `create-component-md`; nothing extra is needed here.
 
 <Tip>
   Describe all interactive parts and how they relate. For example: "The label and hint merge into the input's announcement, but the trailing clear button is a separate focus stop." This helps the agent determine focus order accurately.
@@ -25,34 +25,28 @@ Screen reader specs document how assistive technologies should announce and inte
 
 ## How to use
 
-Reference the skill and paste your Figma link. Include context about interactive parts, states, and merge behavior for a more accurate spec:
+Reference the skill and pass the component `.md`. Add a render destination or any extra context the spec can't carry:
 
 <Tabs>
   <Tab title="Cursor">
     ```
-    @create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
+    @create-voice ./components/search-field.md
 
-    This is a search text field with a trailing clear button. The field has placeholder
-    text "Search" and the clear button appears when text is entered. States: enabled,
-    focused, filled, disabled, and error.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Claude Code">
     ```
-    /create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
+    /create-voice ./components/search-field.md
 
-    This is a search text field with a trailing clear button. The field has placeholder
-    text "Search" and the clear button appears when text is entered. States: enabled,
-    focused, filled, disabled, and error.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Codex">
     ```
-    $create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
+    $create-voice ./components/search-field.md
 
-    This is a search text field with a trailing clear button. The field has placeholder
-    text "Search" and the clear button appears when text is entered. States: enabled,
-    focused, filled, disabled, and error.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
 </Tabs>
@@ -110,31 +104,30 @@ The screen reader skill is heavily AI-driven — the agent determines merge beha
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Extract data| C[Figma MCP]
-    C -->|Component data| B
-    B -->|Render| C
+    A[You] -->|run create-component-md| M["components/&lt;slug&gt;.md"]
+    M -->|Voice section + render-meta| B[create-voice Skill]
+    B -->|Render| C[Figma MCP]
     C -->|Annotation frame| D[Figma Output]
 ```
 
 <Steps>
-  <Step title="Extract">
-    The skill reads child layers, element types, and interactive properties from the component via the Figma MCP.
+  <Step title="Require the .md">
+    The skill requires `components/<slug>.md` (produced by `create-component-md`) and fails fast if it is missing — it does not re-extract from Figma.
   </Step>
-  <Step title="Analyze merge behavior">
-    The agent determines which visual parts are independent focus stops, which merge into another element's announcement, and which are hidden from screen readers.
+  <Step title="Parse the Voice section">
+    The skill parses the `.md`'s Voice section (guidelines, focus order, per-state platform tables) plus the `render-meta` block and the hidden `voice-render-meta` focus-stop layer-name carry.
   </Step>
-  <Step title="Generate per-platform properties">
-    Platform-specific accessibility properties are generated for iOS (VoiceOver), Android (TalkBack), and Web (ARIA) across all states.
+  <Step title="Build render inputs">
+    Sections, focus stops (by Figma layer name), variant props, boolean defs, and slot insertions are assembled directly from the parsed `.md` — no live extraction walk.
   </Step>
   <Step title="Import template">
     The screen reader documentation template is imported from the library, instantiated, and detached into an editable frame.
   </Step>
   <Step title="Render">
-    The skill fills header fields, builds focus order diagrams, state tables, and per-platform property sections.
+    The skill fills header fields, builds focus order diagrams, state tables, and per-platform property sections, placing markers by name-match + live bbox on the rendered instance.
   </Step>
   <Step title="Validate">
-    A screenshot is captured and checked for completeness. Issues are fixed automatically for up to 3 iterations.
+    A screenshot is captured and checked for completeness, including that every documented focus stop resolved a marker. Issues are fixed automatically for up to 3 iterations.
   </Step>
 </Steps>
 

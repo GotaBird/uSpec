@@ -10,14 +10,14 @@ description: "Generate design token specifications mapping UI elements to color 
 Color annotation specs document which design tokens are used for backgrounds, text, icons, and state layers across different component states and variants.
 
 <Tip>
-  Color also ships as part of the [Component Markdown](/specs/component-md) output. Run `create-component-md` when you want API, structure, color, and voice in a single `.md` file instead of a Figma frame.
+  `create-color` now renders **from the [Component Markdown](/specs/component-md) source of truth**. Run `create-component-md` first to produce `components/<slug>.md`; this skill reads its Color section + `render-meta` and renders the Figma frame. It no longer re-extracts from Figma, and it fails fast if the `.md` is missing.
 </Tip>
 
 ## What you need
 
-- A **Figma link** to the component
-- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP)
-- Any additional context about variants, states, or which color modes to include
+- A **component `.md`** produced by `create-component-md` (run it first — `create-component-md` needs a `_base.json` from the uSpec Extract plugin). Tell the skill where this `.md` lives — `components/<slug>.md` is only `create-component-md`'s default output path; the file can live anywhere. Without it this skill aborts.
+- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP) — used only to render the frame.
+- Context about variants, states, or color modes is captured upstream by `create-component-md`; nothing extra is needed here.
 
 <Tip>
   If your component uses Figma variable modes for color variants (e.g., a "Tag color" collection with Default, Success, Warning modes), mention it in your prompt. The agent checks for these automatically, but calling them out helps.
@@ -25,31 +25,28 @@ Color annotation specs document which design tokens are used for backgrounds, te
 
 ## How to use
 
-Reference the skill and paste your Figma link. Include context about states, variants, and variable mode collections for a more complete spec:
+Reference the skill and pass the component `.md`. Add a render destination or any extra context the spec can't carry:
 
 <Tabs>
   <Tab title="Cursor">
     ```
-    @create-color https://www.figma.com/design/abc123/Components?node-id=100:200
+    @create-color ./components/button.md
 
-    This is a button with enabled, hovered, pressed, and disabled states.
-    Include both Default and Danger variants.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Claude Code">
     ```
-    /create-color https://www.figma.com/design/abc123/Components?node-id=100:200
+    /create-color ./components/button.md
 
-    This is a button with enabled, hovered, pressed, and disabled states.
-    Include both Default and Danger variants.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Codex">
     ```
-    $create-color https://www.figma.com/design/abc123/Components?node-id=100:200
+    $create-color ./components/button.md
 
-    This is a button with enabled, hovered, pressed, and disabled states.
-    Include both Default and Danger variants.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
 </Tabs>
@@ -83,34 +80,33 @@ Components where color is controlled by a Figma variable collection (tag colors,
 
 ## How it works
 
-The color skill balances deterministic token extraction and table rendering with AI reasoning for variant organization, state mapping, and sub-component analysis.
+The color skill consumes the Component Markdown source of truth: token mapping, state tables, variant organization, and variable-mode sections were already decided by `create-component-md`, so deterministic scripts render directly from the `.md` while AI reasoning is limited to resolving the parsed spec onto live Figma layers.
 
 <Badge color="green" size="sm" shape="pill">55% Deterministic</Badge> <Badge color="purple" size="sm" shape="pill">45% AI Reasoning</Badge>
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Extract data| C[Figma MCP]
-    C -->|Component data| B
-    B -->|Render| C
+    A[You] -->|run create-component-md| M["components/&lt;slug&gt;.md"]
+    M -->|Color section + render-meta| B[create-color Skill]
+    B -->|Render| C[Figma MCP]
     C -->|Annotation frame| D[Figma Output]
 ```
 
 <Steps>
-  <Step title="Extract">
-    The skill reads fills, strokes, and variable bindings from the component via the Figma MCP.
+  <Step title="Require the .md">
+    The skill requires `components/<slug>.md` (produced by `create-component-md`) and fails fast if it is missing — it does not re-extract from Figma.
   </Step>
-  <Step title="Map tokens">
-    Each color-bearing element is matched to its design token, across all states and variants.
+  <Step title="Parse the Color section">
+    The skill parses the `.md`'s Color section (per-element token mappings, per-state and per-variant tables, variable-mode sections) plus the `render-meta` block, which resolves sections and layers back to live Figma layer ids.
   </Step>
-  <Step title="Detect variable modes">
-    Variable collections (tag color, badge style) are identified and each mode gets its own section.
+  <Step title="Build render inputs">
+    State tables, variant sections, and variable-mode sections are assembled directly from the parsed `.md` — no live extraction walk. The single whitelisted live read is `getLocalVariableCollectionsAsync()`, used only to render mode previews for variable-mode sections.
   </Step>
   <Step title="Import template">
     The color documentation template is imported from the library, instantiated, and detached into an editable frame.
   </Step>
   <Step title="Render">
-    The skill fills header fields, builds state tables, variant sections, and variable mode sections.
+    The skill fills header fields, builds state tables, variant sections, and variable mode sections, locating each target by `render-meta` layer id with a name-match fallback on the rendered instance.
   </Step>
   <Step title="Validate">
     A screenshot is captured and checked for completeness. Issues are fixed automatically for up to 3 iterations.

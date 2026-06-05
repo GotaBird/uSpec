@@ -10,14 +10,14 @@ description: "Generate component property documentation with configuration examp
 API specs document all configurable properties for a component: values, defaults, required vs. optional, and usage examples. This gives engineers a clear reference for implementing the component.
 
 <Tip>
-  The API section also ships as part of the [Component Markdown](/specs/component-md) output. Run `create-component-md` when you want API, structure, color, and voice in a single `.md` file instead of a Figma frame.
+  `create-api` now renders **from the [Component Markdown](/specs/component-md) source of truth**. Run `create-component-md` first to produce `components/<slug>.md`; this skill reads its API section + `render-meta` and renders the Figma frame. It no longer re-extracts from Figma, and it fails fast if the `.md` is missing.
 </Tip>
 
 ## What you need
 
-- A **Figma link** to the component
-- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP)
-- Any additional context about properties, accepted values, or nested component configurations
+- A **component `.md`** produced by `create-component-md` (run it first — `create-component-md` needs a `_base.json` from the uSpec Extract plugin). Tell the skill where this `.md` lives — `components/<slug>.md` is only `create-component-md`'s default output path; the file can live anywhere. Without it this skill aborts.
+- **Figma MCP** connected (Console MCP with Desktop Bridge, or native Figma MCP) — used only to render the frame.
+- Context about properties, accepted values, or nested component configurations is captured upstream by `create-component-md`; nothing extra is needed here.
 
 <Tip>
   Mention which properties are required, what the defaults are, and any sub-components that have their own configuration (e.g., a trailing button inside a section heading).
@@ -25,34 +25,28 @@ API specs document all configurable properties for a component: values, defaults
 
 ## How to use
 
-Reference the skill and paste your Figma link. Include context about the component's properties, accepted values, and sub-component configurations for a more accurate spec:
+Reference the skill and pass the component `.md`. Add a render destination or any extra context the spec can't carry:
 
 <Tabs>
   <Tab title="Cursor">
     ```
-    @create-api https://www.figma.com/design/abc123/Components?node-id=100:200
+    @create-api ./components/section-heading.md
 
-    This is a section heading with leading content (primary/secondary labels),
-    trailing content (text button, icon button, or none), and density options.
-    The label is required, subtitle is optional. Default trailing content is none.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Claude Code">
     ```
-    /create-api https://www.figma.com/design/abc123/Components?node-id=100:200
+    /create-api ./components/section-heading.md
 
-    This is a section heading with leading content (primary/secondary labels),
-    trailing content (text button, icon button, or none), and density options.
-    The label is required, subtitle is optional. Default trailing content is none.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
   <Tab title="Codex">
     ```
-    $create-api https://www.figma.com/design/abc123/Components?node-id=100:200
+    $create-api ./components/section-heading.md
 
-    This is a section heading with leading content (primary/secondary labels),
-    trailing content (text button, icon button, or none), and density options.
-    The label is required, subtitle is optional. Default trailing content is none.
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
     ```
   </Tab>
 </Tabs>
@@ -79,34 +73,33 @@ The agent looks at three sources in Figma to find all configurable properties:
 
 ## How it works
 
-The API skill is heavily AI-driven — the agent classifies properties, determines required vs. optional status, writes descriptions, and designs configuration examples, while deterministic scripts handle template rendering.
+The API skill consumes the Component Markdown source of truth: property classification, required vs. optional status, descriptions, and configuration examples were already decided by `create-component-md`, so deterministic scripts render the tables and examples directly from the `.md`.
 
 <Badge color="green" size="sm" shape="pill">25% Deterministic</Badge> <Badge color="purple" size="sm" shape="pill">75% AI Reasoning</Badge>
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Extract data| C[Figma MCP]
-    C -->|Component data| B
-    B -->|Render| C
+    A[You] -->|run create-component-md| M["components/&lt;slug&gt;.md"]
+    M -->|API section + render-meta| B[create-api Skill]
+    B -->|Render| C[Figma MCP]
     C -->|Annotation frame| D[Figma Output]
 ```
 
 <Steps>
-  <Step title="Extract">
-    The skill reads variant axes, boolean toggles, content slots, and variable modes from the component via the Figma MCP.
+  <Step title="Require the .md">
+    The skill requires `components/<slug>.md` (produced by `create-component-md`) and fails fast if it is missing — it does not re-extract from Figma.
   </Step>
-  <Step title="Classify properties">
-    Each property is categorized as required or optional, and defaults are identified.
+  <Step title="Parse the API section">
+    The skill parses the `.md`'s API section (main property table, sub-component tables, configuration examples) plus the `render-meta` block, which carries property defs, boolean defs, variant axes, slot contents, and sub-component identities.
   </Step>
-  <Step title="Discover sub-components">
-    Nested component instances are resolved to find their own configurable properties.
+  <Step title="Build render inputs">
+    Property tables, sub-component tables, and configuration examples are assembled directly from the parsed `.md` and `render-meta` — no live extraction walk. The one whitelisted live read is a bounded `<=30-line` TEXT-node listing on the instance, used only to source preview text for the configuration examples.
   </Step>
   <Step title="Import template">
     The API documentation template is imported from the library, instantiated, and detached into an editable frame.
   </Step>
   <Step title="Render">
-    The skill fills header fields, builds property tables, sub-component tables, and configuration examples.
+    The skill fills header fields, builds property tables, sub-component tables, and configuration examples, resolving each preview against the instance by name-match.
   </Step>
   <Step title="Validate">
     A screenshot is captured and checked for completeness. Issues are fixed automatically for up to 3 iterations.

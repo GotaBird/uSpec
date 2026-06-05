@@ -33,34 +33,14 @@ This skill runs in two steps: extract, then generate. You need both pieces set u
 
 <Steps>
   <Step title="Install the uSpec Extract plugin">
-    The plugin produces a `_base.json` file that captures every variant, token binding, and sub-component in one pass. Build it locally and import it into Figma Desktop.
-
-    <Note>
-      `npx uspec-skills` installs only the AI skills into your project. The Figma plugin is a separate piece that has to live inside Figma Desktop. Cloning the uSpec repo is the supported way to get the plugin source today.
-    </Note>
+    The plugin produces a `_base.json` file that captures every variant, token binding, and sub-component in one pass. It is published on the Figma Community, so there is no local build.
 
     <Steps>
-      <Step title="Clone the uSpec repository">
-        Clone uSpec anywhere on your machine — it does **not** need to be inside the project where you ran `npx uspec-skills init`. The plugin only needs to live somewhere Figma Desktop can reach to import the manifest.
-
-        ```bash
-        git clone https://github.com/redongreen/uSpec.git
-        cd uSpec/figma-plugin
-        ```
+      <Step title="Open the Community plugin">
+        Go to [uSpec Extract](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) on the Figma Community.
       </Step>
-      <Step title="Build the plugin">
-        ```bash
-        npm install
-        npm run build
-        ```
-
-        This produces `dist/code.js` and `dist/ui.html` next to the manifest. Both files are required for the import in the next step.
-      </Step>
-      <Step title="Import the manifest">
-        In Figma Desktop, go to **Plugins → Development → Import plugin from manifest…** and select `uSpec/figma-plugin/manifest.json` from your local clone.
-      </Step>
-      <Step title="Run from the Development menu">
-        The plugin now appears under **Plugins → Development → uSpec Extract**.
+      <Step title="Install it">
+        Click **Open in…** (or **Try it out**) to add it to your Figma. It then appears under **Plugins → uSpec Extract** in any file.
       </Step>
     </Steps>
 
@@ -69,11 +49,11 @@ This skill runs in two steps: extract, then generate. You need both pieces set u
     </Tip>
 
     <Note>
-      For Node version requirements, the watch-mode dev loop, and common failure modes, see the [Figma Extract plugin troubleshooting tab](/help/troubleshooting).
+      The plugin is open source. If you want to read or modify the source, it lives in [`figma-plugin/`](https://github.com/redongreen/uSpec/tree/main/figma-plugin); the [troubleshooting guide](/help/troubleshooting) covers building from source and common failure modes.
     </Note>
   </Step>
   <Step title="Set up uSpec">
-    You also need the `create-component-md` skill. From your project root, run `npx uspec-skills init` and choose your agent host (Cursor, Claude Code, or Codex). The CLI installs every skill — including `create-component-md` — into the platform-specific directory. If you have not set up your agent host yet, follow [Getting Started](/getting-started). The Component Markdown path does not require Figma MCP setup or `firstrun` — those are only needed for the Figma-native skills.
+    You also need the `create-component-md` skill. From your project root, run `npx uspec-skills init` and choose your agent host (Cursor, Claude Code, or Codex). The CLI installs every skill — including `create-component-md` — into the platform-specific directory. If you have not set up your agent host yet, follow [Getting Started](/getting-started). Generating the `.md` does not require Figma MCP setup or `firstrun` — those are only needed for the `create-*` skills that render the `.md` back into Figma.
   </Step>
 </Steps>
 
@@ -220,7 +200,7 @@ See the [plugin schema reference](https://github.com/redongreen/uSpec/blob/main/
 
 ## Troubleshooting
 
-The accordions below cover issues with the generated `.md` itself. For plugin install or build issues — Figma can't find the plugin, `npm run build` fails, the canvas selection is rejected — see the [Figma Extract plugin troubleshooting tab](/help/troubleshooting).
+The accordions below cover issues with the generated `.md` itself. For plugin install or runtime issues — Figma can't find the plugin, the canvas selection is rejected, the export produces no file — see the [Figma Extract plugin troubleshooting tab](/help/troubleshooting).
 
 <AccordionGroup>
   <Accordion title="Validation error: _base.json does not match schema">
@@ -258,13 +238,13 @@ The accordions below cover issues with the generated `.md` itself. For plugin in
 
 <CardGroup cols={2}>
   <Card title="Getting Started" icon="rocket" href="/getting-started">
-    Install your agent host (Cursor, Claude Code, or Codex). The Component Markdown path skips MCP and template library setup.
+    Install your agent host (Cursor, Claude Code, or Codex). Generating the `.md` skips MCP and template library setup.
   </Card>
   <Card title="How It Works" icon="diagram-project" href="/how-it-works">
-    See the two rendering paths uSpec supports and where this skill fits.
+    See the uSpec pipeline and where this skill fits as the source of truth.
   </Card>
   <Card title="Plugin troubleshooting" icon="puzzle-piece" href="/help/troubleshooting">
-    Build, install, and recovery instructions for the uSpec Extract plugin.
+    Install and recovery instructions for the uSpec Extract plugin.
   </Card>
   <Card title="Screen reader spec" icon="universal-access" href="/specs/screen-reader">
     Render VoiceOver, TalkBack, and ARIA tables directly into Figma.

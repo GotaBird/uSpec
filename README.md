@@ -2,9 +2,9 @@
 
 Generate design system documentation for your UI components, directly from your AI agent.
 
-Describe a component to your agent. A uSpec skill analyzes it using your Figma file as context and either renders the output back into Figma or writes a portable `.md` file. Works with [Figma Console MCP](https://github.com/southleft/figma-console-mcp) or the [native Figma MCP](https://github.com/figma/figma-mcp), inside **Cursor**, **Claude Code**, or **Codex**.
+Describe a component to your agent. uSpec captures it with the [uSpec Extract](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) Figma plugin, generates a portable Component Markdown (`.md`) spec, then renders sections of that spec back into Figma as annotation frames. Works with [Figma Console MCP](https://github.com/southleft/figma-console-mcp) or the [native Figma MCP](https://github.com/figma/figma-mcp), inside **Cursor**, **Claude Code**, or **Codex**.
 
-> **Component Markdown** — `create-component-md` produces one self-contained `.md` per component covering API, structure, color, and screen-reader behavior. An artifact LLM tools can build from and humans can query. It needs the [uSpec Extract Figma plugin](figma-plugin/) (built locally from this repo); every other skill works through your Figma MCP and needs no plugin.
+> **Component Markdown is the source of truth.** `create-component-md` produces one self-contained `.md` per component covering API, structure, color, and screen-reader behavior — an artifact LLM tools can build from and humans can query. It is generated from a `_base.json` capture produced by the [uSpec Extract Figma plugin](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) (free on the Figma Community; source is open in [`figma-plugin/`](figma-plugin/)). Every `create-*` render skill then takes that `.md` as its required input and renders a section into Figma via your MCP.
 
 ## What you can generate
 

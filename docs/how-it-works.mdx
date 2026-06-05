@@ -1,45 +1,53 @@
 ---
 title: "How It Works"
-description: "Understand the two rendering paths and the skill pipelines behind them"
+description: "Understand the uSpec pipeline: extract a component, generate its Component Markdown spec, then render that spec into Figma"
 ---
 
-uSpec connects your AI agent and Figma into a single pipeline. You provide a component link or a plugin capture, and the system produces either annotations rendered back into Figma or a single self-contained `.md` specification.
+uSpec connects your AI agent and Figma into a single pipeline. The **uSpec Extract** plugin captures a component, `create-component-md` turns that capture into a single self-contained `.md` specification, and the `create-*` skills render sections of that `.md` back into Figma as annotation frames.
 
-## Two rendering paths
+## The pipeline
 
-uSpec supports two paths from the same source component. Pick the one that matches where the documentation needs to live.
+```mermaid
+flowchart LR
+    Plugin["uSpec Extract plugin (Figma Community)"] -->|"_base.json"| C["create-component-md"]
+    C -->|"components/componentSlug.md"| R["create-* render skills"]
+    R -->|"annotation frames"| F["Figma"]
+```
+
+Everything flows through the Component Markdown file. It is the required input for every `create-*` render skill — there is no longer a path that points a render skill straight at a raw Figma link.
 
 <CardGroup cols={2}>
-  <Card title="Figma-native path" icon="figma">
-    Output is rendered as annotation frames next to the component in your Figma file. Best for design reviews, spec handoff inside Figma, and component libraries where the spec lives beside the component.
+  <Card title="Component Markdown (.md)" icon="file-code" href="/specs/component-md">
+    The source of truth, written to disk by `create-component-md`. Best for feeding specs to any LLM (Cursor, Claude Design, GPT), committing alongside code, or diffing across design iterations.
   </Card>
-  <Card title="Component Markdown path" icon="file-code" href="/specs/component-md">
-    Output is a single `.md` file saved to disk. Best for feeding specs to any LLM (Cursor, Claude Design, GPT), committing alongside code, or diffing across design iterations.
+  <Card title="Figma annotations" icon="figma">
+    Annotation frames rendered next to the component by the `create-*` skills, drawn from the `.md`. Best for design reviews, spec handoff inside Figma, and component libraries where the spec lives beside the component.
   </Card>
 </CardGroup>
 
-### Figma-native path
+### Stage 1: generate the `.md`
 
 ```mermaid
 flowchart LR
-    A[You] -->|Figma link| B[Agent Skill]
-    B -->|Extract + Render| C[Figma MCP]
-    C -->|Documentation frame| D[Figma Output]
-```
-
-Every Figma-native skill extracts component data through the MCP and renders documentation directly in Figma. The internal steps differ depending on what each skill needs to analyze. The diagrams below show what happens inside each skill.
-
-### Component Markdown path
-
-```mermaid
-flowchart LR
-    A[You] -->|Select component| Plugin[uSpec Extract Plugin]
-    Plugin -->|_base.json| Skill[create-component-md]
-    Skill -->|Parallel specialists| Cache[".uspec-cache/"]
-    Cache -->|Render| MD["components/componentSlug.md"]
+    A[You] -->|"Select component"| Plugin[uSpec Extract Plugin]
+    Plugin -->|"_base.json"| Skill[create-component-md]
+    Skill -->|"Parallel specialists"| Cache[".uspec-cache/"]
+    Cache -->|"Render"| MD["components/componentSlug.md"]
 ```
 
 The plugin runs deterministic extraction inside Figma's sandbox (no network calls), producing a `_base.json` that captures every variant, token binding, and sub-component. The `create-component-md` skill then runs four parallel interpretation agents (API, structure, color, voice), reconciles their outputs, and renders a single Markdown file. See the [Component Markdown page](/specs/component-md#how-it-works) for the full pipeline diagram.
+
+### Stage 2: render into Figma
+
+```mermaid
+flowchart LR
+    A[You] -->|"component .md"| B[Agent Skill]
+    B -->|"Read .md + render-meta"| Plan[Plan annotations]
+    Plan -->|"Render"| C[Figma MCP]
+    C -->|"Documentation frame"| D[Figma Output]
+```
+
+Every `create-*` skill reads its section from the component `.md` — plus the render-meta that maps each section to Figma node ids — then renders documentation directly in Figma through the MCP. They do not re-extract the component over MCP; any live read is a small, whitelisted verification or measurement delta. The internal steps differ depending on what each skill renders. The diagrams below show what happens inside each skill.
 
 ---
 
@@ -57,7 +65,7 @@ The plugin runs deterministic extraction inside Figma's sandbox (no network call
         Continue typing to filter (e.g., `@create-v`) or use arrow keys to select. The skill name must match exactly: `@create-voice`, not `create voice` or `voice spec`.
       </Step>
       <Step title="Add your prompt">
-        After the skill name, paste a Figma link and add any context about states, variants, or behaviors.
+        After the skill name, pass the component `.md` (e.g. `./components/button.md`) and add any context the spec can't carry: which Figma node to render next to, or behaviors and edge cases.
       </Step>
     </Steps>
 
@@ -73,8 +81,8 @@ The plugin runs deterministic extraction inside Figma's sandbox (no network call
       <Step title="Invoke a skill">
         Type `/create-voice` to invoke directly, or just describe what you need (e.g., "create a screen reader spec"). Claude matches skills from `.claude/skills/` by their description.
       </Step>
-      <Step title="Add your Figma link">
-        Paste the Figma component URL and describe the states, variants, or behaviors you want documented.
+      <Step title="Pass the component .md">
+        Point the skill at the component `.md` and describe the states, variants, behaviors, or render destination you want documented.
       </Step>
     </Steps>
 
@@ -90,8 +98,8 @@ The plugin runs deterministic extraction inside Figma's sandbox (no network call
       <Step title="Invoke a skill">
         Type `$` to mention a skill explicitly (e.g., `$create-voice`), or describe what you need and Codex matches skills from `.agents/skills/` by their `description` frontmatter. Use `/skills` to browse available skills.
       </Step>
-      <Step title="Add your Figma link">
-        Paste the Figma component URL and describe the states, variants, or behaviors you want documented.
+      <Step title="Pass the component .md">
+        Point the skill at the component `.md` and describe the states, variants, behaviors, or render destination you want documented.
       </Step>
     </Steps>
 
@@ -105,7 +113,7 @@ The plugin runs deterministic extraction inside Figma's sandbox (no network call
 
 ## Inside each skill
 
-Every skill loads an instruction file, reads platform-specific or domain-specific reference files, extracts data from Figma via MCP, runs through a checklist, and renders the output. The reference files determine what the agent knows about each domain.
+Every render skill loads an instruction file, reads platform-specific or domain-specific reference files, reads its section from the component `.md` (plus the render-meta node ids), runs through a checklist, and renders the output via the MCP. Any live Figma read is a small, whitelisted verification or measurement delta — not a re-extraction. The reference files determine what the agent knows about each domain. (`create-component-md`, the stage-1 generator, is the exception: it reads a plugin `_base.json` rather than a `.md`.)
 
 <Tabs>
   <Tab title="Component Markdown">
@@ -140,18 +148,19 @@ flowchart TB
 ```mermaid
 flowchart TB
     Skill[SKILL.md] --> Instruction[agent-anatomy-instruction.md]
-    Skill --> MCP[Figma MCP]
+    Skill --> MD[component .md]
 
-    MCP --> Extract[Extract children, layers, and properties]
-    Instruction --> Classify[Classify elements and enrich notes]
-    Extract --> Classify
+    MD --> Read[Read anatomy section + render-meta]
+    Instruction --> Classify[Map elements to markers and notes]
+    Read --> Classify
     Classify --> Import[Import and detach template]
     Import --> Composition[Render composition markers and table]
     Composition --> Children[Per-child sections for eligible instances]
-    Children --> Validate[Screenshot validation]
+    Children --> MCP[Figma MCP]
+    MCP --> Validate[Screenshot validation]
 ```
 
-  The skill reads child layers, element types, visibility, and property definitions (booleans, variant axes, instance swaps) from the component. An AI classification step then determines each element's role (optional slot, fixed sub-component, content element, structural/decorative) and writes semantic notes. Utility sub-components like Spacer and Divider are automatically skipped. Eligible nested instances get their own per-child sections with separate markers and tables, and cross-references link back from the composition table.
+  The skill reads child layers, element types, visibility, and property definitions (booleans, variant axes, instance swaps) from the component `.md`. The `.md` already records each element's role (optional slot, fixed sub-component, content element, structural/decorative) and semantic notes from the `create-component-md` run, so the skill maps those onto markers rather than re-classifying. Utility sub-components like Spacer and Divider are automatically skipped. Eligible nested instances get their own per-child sections with separate markers and tables, and cross-references link back from the composition table.
   </Tab>
 
   <Tab title="Properties">
@@ -159,22 +168,23 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    Skill[SKILL.md] --> MCP[Figma MCP]
+    Skill[SKILL.md] --> MD[component .md]
 
-    MCP --> Extract[Extract properties and variant axes]
-    MCP --> Modes[Detect variable mode properties]
-    MCP --> Children[Discover child component properties]
+    MD --> Props[Read properties and variant axes]
+    MD --> Modes[Read variable mode properties]
+    MD --> Children[Read child component properties]
 
-    Extract --> Normalize[Normalize coupled axes and booleans]
+    Props --> Normalize[Normalize coupled axes and booleans]
     Modes --> Normalize
     Children --> Normalize
 
     Normalize --> Import[Import and detach template]
     Import --> Render[Render exhibits with instance previews]
-    Render --> Validate[Screenshot validation]
+    Render --> MCP[Figma MCP]
+    MCP --> Validate[Screenshot validation]
 ```
 
-  The skill reads `componentPropertyDefinitions` to discover all variant axes, boolean toggles, and instance swap properties. Variable mode collections (shape, density) are detected automatically. Child component properties are rendered in-context on parent instances.
+  The skill reads the API and properties sections of the `.md` to recover all variant axes, boolean toggles, and instance swap properties. Variable mode collections (shape, density) are already resolved in the `.md`. Child component properties are rendered in-context on parent instances using live instances placed via the MCP.
   </Tab>
 
   <Tab title="API">
@@ -183,12 +193,12 @@ flowchart TB
 ```mermaid
 flowchart TB
     Skill[SKILL.md] --> Instruction[agent-api-instruction.md]
-    Skill --> MCP[Figma MCP]
+    Skill --> MD[component .md]
 
     Instruction --> Analyze[Analyze properties]
-    MCP --> Props[Extract variant properties]
-    MCP --> Booleans[Extract boolean properties]
-    MCP --> Slots[Extract sub-component slots]
+    MD --> Props[Read variant properties]
+    MD --> Booleans[Read boolean properties]
+    MD --> Slots[Read sub-component slots]
 
     Props --> Analyze
     Booleans --> Analyze
@@ -201,11 +211,11 @@ flowchart TB
     MainTable --> Examples[Generate configuration examples]
     SubTables --> Examples
     Examples --> Checklist[Audit against checklist]
-    Checklist --> Render[Render in Figma]
+    Checklist --> Render[Render in Figma via MCP]
     Render --> Validate[Screenshot validation]
 ```
 
-  Transient states like hovered and pressed are excluded from the API. They are handled at runtime. Only persistent, configurable properties like `isDisabled` or `isSelected` become API entries.
+  The API section of the `.md` already lists every variant property, boolean toggle, and sub-component slot. Transient states like hovered and pressed are excluded from the API — they are handled at runtime. Only persistent, configurable properties like `isDisabled` or `isSelected` become API entries.
   </Tab>
 
   <Tab title="Structure">
@@ -214,23 +224,23 @@ flowchart TB
 ```mermaid
 flowchart TB
     Skill[SKILL.md] --> Instruction[agent-structure-instruction.md]
-    Skill --> MCP[Figma MCP]
+    Skill --> MD[component .md]
 
-    MCP --> Extract["Tier 1: Deterministic extraction"]
-    Extract --> Dims[Dimensions, tokens, sub-components]
-    Extract --> Compare[Cross-variant comparison]
+    MD --> Read["Read structure section"]
+    Read --> Dims[Dimensions, tokens, sub-components]
+    Read --> Compare[Cross-variant deltas]
 
-    Dims --> Interpret["Tier 2: AI interpretation"]
+    Dims --> Interpret["AI interpretation"]
     Compare --> Interpret
     Instruction --> Interpret
 
     Interpret --> Plan[Section plan, notes, anomaly detection]
     Plan --> Import[Import and detach template]
-    Import --> Render["Tier 1: Deterministic render"]
+    Import --> Render["Deterministic render via MCP"]
     Render --> Validate[Screenshot validation]
 ```
 
-  The AI's reasoning budget is spent on interpretation — building the section plan, writing design-intent notes, and detecting anomalies — rather than data gathering. Deterministic scripts (~60% of the pipeline) handle extraction, cross-variant comparison, table rendering, and native Figma measurements. Values are reported as token references when bound to a variable (e.g., `sizing-button-lg (56)`) or as plain numbers when hardcoded.
+  The structure section of the `.md` already carries the dimensions, token references, sub-component walks, and cross-variant deltas (measured deterministically during the `create-component-md` run). The skill's reasoning budget is spent on interpretation — building the section plan, writing design-intent notes, and detecting anomalies — rather than data gathering. Values are reported as token references when bound to a variable (e.g., `sizing-button-lg (56)`) or as plain numbers when hardcoded.
   </Tab>
 
   <Tab title="Color Annotation">
@@ -239,19 +249,18 @@ flowchart TB
 ```mermaid
 flowchart TB
     Skill[SKILL.md] --> Instruction[agent-color-instruction.md]
-    Skill --> MCP[Figma MCP]
+    Skill --> MD[component .md]
 
     Instruction --> Analyze[Analyze color usage]
-    MCP --> Tokens[Extract design tokens]
-    MCP --> Variables[Extract variable values]
-    MCP --> Styles[Extract styles]
+    MD --> Tokens[Read design tokens]
+    MD --> Variables[Read variable values]
+    MD --> Styles[Read styles]
 
-    Tokens --> Enrich[Boolean enrichment: enable hidden toggles]
-    Variables --> Enrich
-    Styles --> Enrich
+    Tokens --> ClassifyAxes[Classify color-relevant axes]
+    Variables --> ClassifyAxes
+    Styles --> ClassifyAxes
 
-    Enrich --> ClassifyAxes[Classify color-relevant axes]
-    ClassifyAxes --> DetectModes[Detect variable mode collections]
+    ClassifyAxes --> DetectModes[Read variable mode collections]
     DetectModes --> Strategy{Strategy A or B?}
 
     Strategy -->|"6 or fewer sections"| StratA[Strategy A: one section per variant]
@@ -260,11 +269,11 @@ flowchart TB
     Analyze --> Strategy
     StratA --> Checklist[Audit against checklist]
     StratB --> Checklist
-    Checklist --> Render[Render in Figma]
+    Checklist --> Render[Render in Figma via MCP]
     Render --> Validate[Screenshot validation]
 ```
 
-  The agent reads token names directly from Figma variables, so the output uses your actual token naming conventions rather than generic names. Hidden boolean toggles are enabled during extraction to capture color bindings that only appear when optional elements are visible. The strategy decision determines the output layout: Strategy A renders one section per variant for simpler components, while Strategy B uses states as table columns for components with many variant combinations.
+  The color section of the `.md` records per-element token mappings using your actual token naming conventions rather than generic names. Because `create-component-md` enables hidden boolean toggles during extraction, the `.md` already captures color bindings that only appear when optional elements are visible. The strategy decision determines the output layout: Strategy A renders one section per variant for simpler components, while Strategy B uses states as table columns for components with many variant combinations.
   </Tab>
 
   <Tab title="Screen Reader">
@@ -277,10 +286,10 @@ flowchart TB
     Skill --> TB[talkback.md]
     Skill --> AR[aria.md]
 
-    Instruction --> MCP[Figma MCP]
-    MCP --> Extract[Extract component structure]
+    Instruction --> MD[component .md]
+    MD --> Read[Read voice section + structure]
 
-    Extract --> Merge[Merge analysis]
+    Read --> Merge[Merge analysis]
     Merge --> Focus[Identify focus stops]
 
     VO --> Gen[Generate platform tables]
@@ -289,11 +298,11 @@ flowchart TB
     Focus --> Gen
 
     Gen --> Checklist[Audit against checklist]
-    Checklist --> Render[Render in Figma]
+    Checklist --> Render[Render in Figma via MCP]
     Render --> Validate[Screenshot validation]
 ```
 
-  The merge analysis is the critical step. It determines which visual parts become independent focus stops and which get merged into a parent announcement. The three platform files provide the exact property names and announcement patterns for iOS, Android, and Web.
+  The voice section of the `.md` already records the focus order and merge analysis — which visual parts become independent focus stops and which get merged into a parent announcement. The three platform files provide the exact property names and announcement patterns for iOS, Android, and Web.
   </Tab>
 
   <Tab title="Motion">
@@ -322,20 +331,20 @@ flowchart TB
 
 ---
 
-## What the agent sees vs. what you provide
+## What the pipeline captures vs. what you provide
 
-The agent can extract structure, tokens, and styles from Figma automatically. But some information only exists in your head:
+The uSpec Extract plugin and `create-component-md` capture structure, tokens, and styles into the `.md` automatically. But some information only exists in your head — add it in the plugin's design-intent field or in your prompt:
 
-| The agent can extract | You need to describe |
+| The pipeline captures | You need to describe |
 |----------------------|---------------------|
-| Component layers and hierarchy | States not visible in the current frame |
+| Component layers and hierarchy | States not visible in the captured variants |
 | Design token names and values | Behavioral modes (fill vs. hug, truncation) |
 | Variant axes and properties | Focus order preferences |
 | Visual dimensions and spacing | Platform-specific interaction details |
 | Styles and color values | Business logic or conditional rules |
 
 <Tip>
-  The more context you provide in your prompt, the more accurate the output. A one-line prompt works, but adding states, behaviors, and edge cases produces significantly better specs.
+  The more context you provide when generating the `.md`, the more accurate every downstream render is. A one-line prompt works, but adding states, behaviors, and edge cases produces significantly better specs.
 </Tip>
 
 ---
@@ -347,9 +356,12 @@ flowchart TB
     subgraph Host["Agent Host (Cursor / Claude Code / Codex)"]
         direction TB
         Prompt[Your prompt]
+        MD[component .md]
         Skill[Agent skill + reference files]
         Agent[AI agent]
-        Prompt --> Skill --> Agent
+        Prompt --> Skill
+        MD --> Skill
+        Skill --> Agent
     end
 
     subgraph Figma["Figma"]
@@ -364,18 +376,18 @@ flowchart TB
         Native["Native Figma MCP"]
     end
 
-    Agent <-->|Component data, tokens, styles| MCP
-    Agent -->|Render documentation| MCP
+    Agent -->|"Render documentation"| MCP
+    Agent <-->|"Verify + small whitelisted reads"| MCP
     MCP <-->|Read + write| File
     File --> Output
 ```
 
-uSpec supports two Figma MCP providers — choose the one that fits your setup:
+The component data, tokens, and styles a render skill needs come from the `.md` — not a live MCP extraction. The MCP is the render channel back into Figma, plus the occasional small whitelisted read for verification or a measurement delta. uSpec supports two Figma MCP providers — choose the one that fits your setup:
 
 - **Figma Console MCP** (by Southleft) connects via a Desktop Bridge plugin running inside Figma Desktop, communicating over WebSocket. It exposes 59+ tools for design creation and variable management.
 - **Native Figma MCP** (by Figma) connects directly to Figma's API with read and write access. No Desktop Bridge plugin required.
 
-Both providers give the agent real-time access to component data, tokens, styles, and screenshots. Every skill renders through the MCP, regardless of which provider or host you use. See [Getting Started](/getting-started#2-set-up-figma-mcp) for setup instructions.
+Both providers let the agent render annotation frames into Figma and capture screenshots for validation. Every render skill draws through the MCP, regardless of which provider or host you use. See [Getting Started](/getting-started#2-set-up-figma-mcp) for setup instructions.
 
 <Note>
   MCP providers update their capabilities and setup instructions frequently. For the latest details, see the [Figma Console MCP docs](https://docs.figma-console-mcp.southleft.com/) or the [native Figma MCP docs](https://github.com/figma/figma-mcp).

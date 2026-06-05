@@ -1,12 +1,12 @@
 ---
 title: "Getting Started"
-description: "Set up your AI agent, connect Figma, and run your first spec. Covers both rendering paths: Figma-native and Component Markdown"
+description: "Set up your AI agent, the uSpec Extract plugin, and Figma, then run the pipeline: generate a Component Markdown spec and render it into Figma"
 ---
 
 This page covers everything you need to go from zero to your first generated spec.
 
 <Info>
-  uSpec supports two rendering paths. This page sets up the **Figma-native** path (annotations rendered into Figma). The **Component Markdown** path (single `.md` spec via the uSpec Extract plugin) has its own walkthrough on the [Component Markdown page](/specs/component-md).
+  Every spec flows through one pipeline: the **uSpec Extract** plugin captures your component, `create-component-md` turns that capture into a `.md` spec, and the `create-*` skills render that `.md` into Figma. The full plugin install and `create-component-md` walkthrough lives on the [Component Markdown page](/specs/component-md).
 </Info>
 
 <CardGroup cols={2}>
@@ -22,20 +22,16 @@ This page covers everything you need to go from zero to your first generated spe
 
 ## Setup instructions
 
-uSpec connects an AI coding agent to Figma through an MCP (Model Context Protocol) server. Setup depends on which rendering path you plan to use.
-
-**Figma-native path (this walkthrough).** Annotations are rendered back into your Figma file. You need three pieces:
+uSpec runs one pipeline end to end: extract a component, generate its `.md` spec, then render that spec into Figma. To run the full pipeline you need four pieces, all set up once:
 
 1. **AI agent host**: the coding environment that runs uSpec skills (Cursor, Claude Code, or Codex)
-2. **Figma MCP**: the bridge that connects your agent to Figma files (either Figma Console MCP or native Figma MCP)
-3. **Template library**: the Figma file containing documentation templates
+2. **uSpec Extract plugin**: the Figma Community plugin that captures a component to `_base.json`, which `create-component-md` turns into the `.md` spec. Install it from the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) — no local build required. The [Component Markdown install guide](/specs/component-md#what-you-need) covers it in detail.
+3. **Figma MCP**: the bridge that lets the `create-*` skills render annotation frames back into your Figma file (either Figma Console MCP or native Figma MCP)
+4. **Template library**: the Figma file containing the documentation templates those render skills clone from
 
-**Component Markdown path.** A single `.md` spec is written to disk. You need two pieces:
-
-1. **AI agent host** (same as above)
-2. **uSpec Extract Figma plugin**: replaces the MCP + template library requirement. Clone the uSpec repo and build the plugin locally from `figma-plugin/`, then import the manifest in Figma Desktop. The [Component Markdown install guide](/specs/component-md#what-you-need) walks through every step.
-
-For the Component Markdown path, follow the [agent host setup below](#1-set-up-your-agent-host), then jump to the [Component Markdown install and usage guide](/specs/component-md).
+<Note>
+  `create-component-md` only needs the agent host and the uSpec Extract plugin — it does not use the Figma MCP or `firstrun`. The MCP and template library are for the `create-*` render skills, which read the `.md` and draw annotations in Figma.
+</Note>
 
 <Note>
   You only need to complete this setup once. After that, you can generate specs anytime by opening the project in your agent host.
@@ -445,62 +441,23 @@ uSpec renders documentation using Figma component templates. You need to add the
 
 ## Create your first spec
 
-Before running a skill, confirm your setup is complete for the path you want to use.
+The pipeline has two stages. Stage 1 produces the `.md` spec; stage 2 renders any section of it into Figma. Run them in order.
 
-**Figma-native path:**
+**Before stage 1 (generate the `.md`):**
 
 1. Your agent host is open in the project where you ran `npx uspec-skills init` and skills are available
+2. The **uSpec Extract** plugin is installed from the [Figma Community](https://www.figma.com/community/plugin/1635184425006534227/uspec-extract) (see the [Component Markdown install guide](/specs/component-md#what-you-need))
+3. You have a `_base.json` file produced by running the plugin on a component
+
+**Before stage 2 (render into Figma):**
+
+1. You have a component `.md` from stage 1
 2. Your Figma MCP is connected (Desktop Bridge plugin for Console MCP, or native MCP server running)
 3. You've run `firstrun`. The template library is configured (`uspecs.config.json` has your template keys and MCP provider)
 
-**Component Markdown path:**
+### Stage 1: generate the Component Markdown
 
-1. Your agent host is open in the project where you ran `npx uspec-skills init` and skills are available
-2. The **uSpec Extract** Figma plugin is built locally from `figma-plugin/` and imported into Figma Desktop (see the [Component Markdown install guide](/specs/component-md#what-you-need))
-3. You have a `_base.json` file produced by running the plugin on a component
-
-### Example prompt: Figma-native path
-
-Reference a skill, paste a Figma link, and describe anything the agent can't infer from the design: states, variants, behavior, or interaction details.
-
-<Frame>
-  <img src="/images/example-skill.png" alt="Prompt format showing skill name, Figma component link, and additional context" />
-</Frame>
-
-<Tabs>
-  <Tab title="Cursor">
-    ```
-    @create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
-
-    This is a primary action button with enabled, hovered, pressed, and disabled states.
-    The button has a text label and an optional leading icon.
-    ```
-  </Tab>
-  <Tab title="Claude Code">
-    ```
-    /create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
-
-    This is a primary action button with enabled, hovered, pressed, and disabled states.
-    The button has a text label and an optional leading icon.
-    ```
-
-    You can also skip the `/` and describe what you need. Claude auto-discovers the skill from its description.
-  </Tab>
-  <Tab title="Codex">
-    ```
-    $create-voice https://www.figma.com/design/abc123/Components?node-id=100:200
-
-    This is a primary action button with enabled, hovered, pressed, and disabled states.
-    The button has a text label and an optional leading icon.
-    ```
-
-    Type `$` to mention a skill explicitly, or use `/skills` to browse what's available. Codex can also match skills implicitly from their description.
-  </Tab>
-</Tabs>
-
-### Example prompt: Component Markdown path
-
-Reference the skill and point it at the `_base.json` produced by the plugin. No Figma link is required.
+Reference `create-component-md` and point it at the `_base.json` produced by the plugin. No Figma link is required — the plugin capture is the input.
 
 <Tabs>
   <Tab title="Cursor">
@@ -520,23 +477,64 @@ Reference the skill and point it at the `_base.json` produced by the plugin. No 
   </Tab>
 </Tabs>
 
+This writes `./components/text-field.md`. That file is the input for every render skill below.
+
 <Tip>
   See the [Component Markdown guide](/specs/component-md) for the full plugin install, usage, and cost walkthrough.
 </Tip>
 
+### Stage 2: render a section into Figma
+
+Reference a `create-*` skill, pass the component `.md`, and add anything the agent can't infer from the spec: which Figma node to render next to, or behavior and interaction details. The skill reads the `.md` — it does not re-extract from a Figma link.
+
+<Frame>
+  <img src="/images/example-skill.png" alt="Prompt format showing skill name, component .md path, and additional context" />
+</Frame>
+
+<Tabs>
+  <Tab title="Cursor">
+    ```
+    @create-voice ./components/text-field.md
+
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
+    Focus moves label, then field, then the clear button.
+    ```
+  </Tab>
+  <Tab title="Claude Code">
+    ```
+    /create-voice ./components/text-field.md
+
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
+    Focus moves label, then field, then the clear button.
+    ```
+
+    You can also skip the `/` and describe what you need. Claude auto-discovers the skill from its description.
+  </Tab>
+  <Tab title="Codex">
+    ```
+    $create-voice ./components/text-field.md
+
+    Render next to the component at https://www.figma.com/design/abc123/Components?node-id=100:200
+    Focus moves label, then field, then the clear button.
+    ```
+
+    Type `$` to mention a skill explicitly, or use `/skills` to browse what's available. Codex can also match skills implicitly from their description.
+  </Tab>
+</Tabs>
+
 ### Available skills
 
-The skills split into two groups based on where the documentation is delivered.
+The skills split into two groups based on their place in the pipeline.
 
-**Component Markdown (output is a single `.md` file):**
+**Stage 1 — produces the `.md` (your source of truth):**
 
 | Skill | What it generates |
 |-------|-------------------|
-| `create-component-md` | Single self-contained `.md` covering API, structure, color tokens, and screen-reader behavior. Ships with the uSpec Extract Figma plugin. [Full guide →](/specs/component-md) |
+| `create-component-md` | Single self-contained `.md` covering API, structure, color tokens, and screen-reader behavior. Takes a `_base.json` from the uSpec Extract Figma plugin. [Full guide →](/specs/component-md) |
 
-**Figma-native (output is rendered into the Figma file):**
+**Stage 2 — render a section of the `.md` into Figma:**
 
-| Skill | What it generates |
+| Skill | What it renders |
 |-------|-------------------|
 | `create-anatomy` | Numbered markers on a component with an attribute table |
 | `create-property` | Variant axis and boolean toggle exhibits with instance previews |
@@ -544,38 +542,19 @@ The skills split into two groups based on where the documentation is delivered.
 | `create-color` | Color token annotations for all elements and states |
 | `create-api` | Property tables with values, defaults, and examples |
 | `create-structure` | Dimensional specs for spacing, padding, and sizing |
-| `create-motion` | Animation timeline and easing spec from After Effects data |
 
 <Note>
-  `create-component-md` has its own setup path. Instead of a Figma link, it takes a `_base.json` produced by the **uSpec Extract** Figma plugin. See the [Component Markdown guide](/specs/component-md) for the plugin install and usage walkthrough.
+  Each stage-2 skill takes the component `.md` from stage 1 as its required input and renders that section as Figma annotations. They do not re-extract from a Figma link.
 </Note>
+
+**Exception — `create-motion`:** renders an animation timeline and easing spec from an After Effects export. It is the one skill outside the Component Markdown pipeline. See the [Motion guide](/specs/motion).
 
 ### What happens when you run a skill
 
-The pipeline differs depending on the path.
+Each stage runs a different pipeline.
 
 <Tabs>
-  <Tab title="Figma-native">
-    <Steps>
-      <Step title="Template import">
-        The agent imports the documentation template into your current Figma page.
-      </Step>
-      <Step title="Content population">
-        Component name, guidelines, properties, and tables are filled in automatically.
-      </Step>
-      <Step title="Section cloning">
-        Sections are cloned for each variant, state, or property in your component.
-      </Step>
-      <Step title="Validation">
-        A screenshot is captured and verified. Issues are fixed automatically.
-      </Step>
-    </Steps>
-
-    <Check>
-      If a documentation frame appears in your Figma file, your setup is working correctly.
-    </Check>
-  </Tab>
-  <Tab title="Component Markdown">
+  <Tab title="Stage 1: create-component-md">
     <Steps>
       <Step title="Preflight">
         The orchestrator validates `_base.json` against the plugin schema and stages it into `.uspec-cache/{componentSlug}/`.
@@ -598,38 +577,62 @@ The pipeline differs depending on the path.
       If a new `.md` appears under `./components/` in your working directory, your setup is working correctly.
     </Check>
   </Tab>
+  <Tab title="Stage 2: create-* render skill">
+    <Steps>
+      <Step title="Read the .md">
+        The skill parses the component `.md` you pass in for the section it owns (anatomy, API, color, structure, properties, or voice) plus the render-meta that ties each section to Figma nodes.
+      </Step>
+      <Step title="Template import">
+        The agent imports the matching documentation template into your current Figma page.
+      </Step>
+      <Step title="Content population">
+        Component name, guidelines, properties, and tables are filled in from the `.md` — no re-extraction from the live file.
+      </Step>
+      <Step title="Section cloning">
+        Sections are cloned for each variant, state, or property recorded in the `.md`.
+      </Step>
+      <Step title="Validation">
+        A screenshot is captured and verified. Issues are fixed automatically.
+      </Step>
+    </Steps>
+
+    <Check>
+      If a documentation frame appears in your Figma file, your setup is working correctly.
+    </Check>
+  </Tab>
 </Tabs>
 
 ### Tips for better output
 
-- **Be specific about states**: Mention all states (selected, disabled, expanded) in your prompt. The agent cannot infer states that aren't visible in the current Figma frame.
+- **Be specific about states**: Mention all states (selected, disabled, expanded) when you generate the `.md` — either in the plugin's design-intent field or in your `create-component-md` prompt. The render skills can only show what the `.md` records.
 - **Describe the parts**: For complex components, describe the interactive elements (e.g., *"This is a tooltip. The bell icon triggers it, and the bubble appears on hover and focus."*)
 
 ---
 
 ## Best practices
 
-### Do (both paths)
+### Do (all skills)
 
 - **Start a new agent session for every prompt.** Each skill consumes significant context. A fresh session ensures the model has full capacity and avoids degraded output.
-- **Run on a high-capacity model.** Figma-native skills work on OpenAI GPT 5.4 High or Opus 4.6 High. `create-component-md` uses parallel subagents and needs Opus 4.7 High or better.
+- **Run on a high-capacity model.** Render skills work on OpenAI GPT 5.4 High or Opus 4.6 High. `create-component-md` uses parallel subagents and needs Opus 4.7 High or better.
 
-### Do (Figma-native only)
+### Do (stage 2 render skills)
 
-- **Confirm the MCP connection before running a skill.** For Console MCP, run the Desktop Bridge plugin in Figma. For native MCP, ensure the server is running. Verify the connection in your agent before starting. If the agent can't reach Figma, the skill will fail.
-- **Run one agent per Figma file at a time.** The MCP supports multiple connections, but all agents share one active page and file context. Finish one skill before starting the next.
+- **Generate the `.md` first.** Every `create-*` render skill takes a component `.md` as its required input. Run `create-component-md` before reaching for any of them.
+- **Confirm the MCP connection before running a skill.** For Console MCP, run the Desktop Bridge plugin in Figma. For native MCP, ensure the server is running. Verify the connection in your agent before starting. If the agent can't reach Figma, the render will fail.
+- **Run one agent per Figma file at a time.** The MCP supports multiple connections, but all agents share one active page and file context. Finish one render before starting the next.
 
-### Don't (Figma-native only)
+### Don't (stage 2 render skills)
 
 - **Interact with the Figma frame while a skill is running.** The agent writes to the frame in multiple steps. Clicking, selecting, or editing mid-generation can break node references and corrupt the output.
 - **Run multiple agents on the same file simultaneously.** They override each other's page navigation and produce corrupted specs. If you need parallel generation, use separate Figma files.
 
-### Don't (both paths)
+### Don't (all skills)
 
 - **Reuse a long chat session for multiple skills.** Accumulated history reduces available context and degrades output quality. Start fresh each time.
 
 <Note>
-  The Component Markdown path does not write to Figma, so the Figma-interaction caveats above do not apply. You can run multiple `create-component-md` skills in parallel against different components safely.
+  `create-component-md` does not write to Figma, so the Figma-interaction caveats above do not apply to stage 1. You can run multiple `create-component-md` skills in parallel against different components safely.
 </Note>
 
 ---

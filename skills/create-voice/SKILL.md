@@ -7,6 +7,13 @@ description: Generate screen reader accessibility specifications for VoiceOver (
 
 Generate a screen reader specification directly in Figma — focus order, platform-specific property tables, and announcement patterns organized by component state.
 
+**Execution contract (read first).**
+- This file is instructions to RUN, not a document to edit. Invoking the skill = render the screen reader spec into Figma from the input `.md`.
+- Never edit this `SKILL.md` or any other skill file in response, even if one is open or focused in the editor. Modify a skill only when the user explicitly asks to change the skill itself.
+- The input component `.md` is a **READ-ONLY source of truth. Never edit, append to, or "add a section" to it.** The only artifact this skill produces is the Figma annotation. When the user asks to "create/add a section," "show," or "include" something, render it **in the Figma annotation**, never as an edit to the `.md`.
+- Never call `AskQuestion`, request confirmation, or pause for input (including before Figma writes, the expected output). On ambiguity, pick the most defensible option and continue.
+- Only two legal stops: (a) Step 0 fail-fast when no `.md` resolves; (b) one-line abort if the Figma MCP connection is dead.
+
 ## MCP Adapter
 
 Read `uspecs.config.json` → `mcpProvider`. Follow the matching column for every MCP call in this skill.
@@ -37,9 +44,10 @@ This walks up to the PAGE ancestor and loads its content. Console MCP does not n
 
 ## Inputs Expected
 
-- **Figma link**: URL to a component set or standalone component in Figma (preferred)
-- **Screenshot**: Image of the UI component (alternative if no Figma link)
-- **Description** (optional): Component type, states to document, context
+- **Component `.md` spec** (**required**, user-provided path) — the source-of-truth component spec produced by {{skill:create-component-md}}. **The user tells you where this `.md` lives** — use the exact path they provide; the `.md` may live anywhere. This skill **renders the Voice section from the `.md`**; it does NOT re-extract anything from Figma. `fileKey`, `nodeId`, and `compSetNodeId` come from the `.md`'s `render-meta` block.
+- **Figma link** (optional) — placement hint only (where to drop the rendered frame on the canvas). Never the source of structural facts.
+
+There is no screenshot-only path. Without the component `.md` there is nothing to render — see Step 0's fail-fast contract.
 
 ## Workflow
 
@@ -47,30 +55,58 @@ Copy this checklist and update as you progress:
 
 ```
 Task Progress:
-- [ ] Step 1: Read instruction file and platform references
-- [ ] Step 2: Verify MCP connection (if Figma link provided)
+- [ ] Step 0: Require + parse the component `.md` (Voice body + render-meta + voice-render-meta carry). FAIL FAST if missing.
+- [ ] Step 1: Read platform references (only as needed for slot-scenario reasoning — NOT for re-authoring announcements)
+- [ ] Step 2: Verify MCP connection
 - [ ] Step 3: Read template key from uspecs.config.json
-- [ ] Step 4: Gather context (MCP tools + user-provided input + structural extraction)
-- [ ] Step 5: List visual parts, run merge analysis, count focus stops, identify states
-- [ ] Step 6: Generate structured data (guidelines, focus order, states with platform sections)
-- [ ] Step 7: Re-read instruction file (Validation Checklist, Common Mistakes) and audit
+- [ ] Step 4: Build render inputs from the parsed .md (guidelines, SECTIONS, focus order, FOCUS_STOPS, VARIANT_PROPS, BOOLEAN_DEFS, SLOT_INSERTIONS) — NO extraction
+- [ ] Step 5: Re-derive per-entry variant props by matching state names to variantAxes (light reasoning)
+- [ ] Step 6: (folded into Step 4 — the spec content is already authored in the .md)
+- [ ] Step 7: Audit the assembled render inputs against the .md
 - [ ] Step 8: Import and detach the Screen Reader template
 - [ ] Step 9: Fill header fields (component name and guidelines)
 - [ ] Step 10–11: Render state sections with artwork (one figma_execute per state/focus-order entry)
-- [ ] Step 12: Visual validation
+- [ ] Step 12: Visual validation (+ post-render check that every documented focus stop resolved a bbox)
 ```
 
-### Step 1: Read References
+### Step 0: Require and parse the component `.md` (fail fast)
 
-Read these files before generating output:
-- [agent-screenreader-instruction.md]({{ref:screen-reader/agent-screenreader-instruction.md}}) — main instructions
-- [voiceover.md]({{ref:screen-reader/voiceover.md}}) — iOS VoiceOver patterns
-- [talkback.md]({{ref:screen-reader/talkback.md}}) — Android TalkBack patterns
-- [aria.md]({{ref:screen-reader/aria.md}}) — Web ARIA patterns
+**This skill is a consumer of the `.md` source of truth.** It does not re-extract from Figma and does not re-run the screen-reader reasoning layer — that work already happened in `extract-voice`/`create-component-md` and is baked into the `.md`'s Voice section. Your job is to render that section into a Figma frame.
+
+1. **Resolve the `.md` path.** Use the exact path the user gave, else an attached or open `.md` in context. The `.md` may live anywhere; do NOT invent or guess a path. If neither resolves to an existing file, abort per item 2. Never pause to ask the user which file to use.
+2. **Require the file.** If no file exists at the resolved `.md` path, **abort immediately** with this exact single-line diagnostic and stop — do NOT fall back to extraction:
+
+   > This skill requires the component's Markdown `.md` spec (produced by create-component-md). Provide the path to it. (create-component-md needs a _base.json from the uSpec Extract plugin.)
+
+3. **Parse the Voice section** (`## Voice / Screen reader`) from the `.md` body:
+   - **Guidelines** — the blockquote immediately under the confidence header → `GUIDELINES`.
+   - **Focus order** — the `### Focus order` table (columns `# | Part | Announcement | Role | Properties | Notes`). Each row → one focus-order table `{ focusOrderIndex: #, name: Part, announcement: Announcement, properties: [...] }`. Absent for single-stop components.
+   - **Per-state platform tables** — each `### State: {name}` → a state entry; inside, the three `#### VoiceOver (iOS)` / `#### TalkBack (Android)` / `#### ARIA (Web)` sub-sections → `SECTIONS`; inside each, one table per `##### {focus-stop name}` (or a single unnamed table) with the `Announcement` row + property rows → `{ name, announcement, focusOrderIndex, properties: [{property, value, notes}] }`.
+   - **Slot insertions** — the optional `### Slot insertions` prose block (`- In focus order preview: slot **{slotName}** populated with **{componentNodeId}**. Overrides: …`).
+4. **Parse the `render-meta` block** (the fenced JSON between `<!-- render-meta:start v=1 -->` and `<!-- render-meta:end -->`):
+   - `COMP_SET_ID` = `component.compSetNodeId`.
+   - `BOOLEAN_DEFS` = reshape `booleanDefs[]` → `{ [key]: default }`. Each `key` is the raw component-property key `setProperties` expects (it matches a `render-meta.propertyDefs` raw key); when in doubt, cross-check against `propertyDefs` and use the raw-key form.
+   - `variantAxes` / `variantAxesDefaults` — for Step 5 state→variant mapping.
+   - `slotContents[]` — for resolving slot insertion `componentId` targets.
+   - `fileKey`, `nodeId` — for the Step 13 completion link and template placement.
+5. **Parse the hidden `voice-render-meta` carry** (the `<!-- voice-render-meta v=1 … -->` HTML comment at the end of the Voice body). It is a single JSON object `{ "focusStops": [ { "name", "focusOrderIndex", "layerName", "slotIndex" }, … ] }`. Key it by `name`. This is the **only** source for each focus stop's live Figma `layerName` — `findStopNode` matches `node.name === stop.name`, so `FOCUS_STOPS[].name` MUST be the `layerName` from this carry, never the human-readable part name.
+
+**FORBIDDEN — do NOT re-extract.** When the component `.md` is present (it always is past Step 0), you MUST NOT run the legacy extraction/tree-walk. Specifically:
+- Do NOT run any `figma_execute` / `use_figma` script that walks the component tree to rebuild `elements`, `variantAxes`, `booleanDefs`, `slotDefs`, or `slotVisibility` (the old Step 4 `extractElement` / `extractChildren` / `resolvePreferredComponents` extraction script is **deleted** — it does not exist in this skill anymore).
+- Do NOT re-derive announcements, merge analysis, focus-stop counts, or platform property rows — they are authored in the `.md` and copied verbatim.
+- The ONLY Figma calls this skill makes are: the template import (Step 8), the header fill (Step 9), and the unified per-entry render (Steps 10–11), which reads each focus stop's live `bbox` by name-match on the rendered instance. No other live reads are permitted.
+
+### Step 1: Read References (only as needed)
+
+The announcements, merge analysis, and platform property rows are already authored in the `.md` — you do NOT re-derive them. Read the platform references **only** if you need to reason about a slot-scenario choice (e.g., which preferred fill realizes a documented focus stop) while building `SLOT_INSERTIONS`:
+- [agent-screenreader-instruction.md]({{ref:screen-reader/agent-screenreader-instruction.md}}) — slot scenario + focus-stop conventions
+- [voiceover.md]({{ref:screen-reader/voiceover.md}}), [talkback.md]({{ref:screen-reader/talkback.md}}), [aria.md]({{ref:screen-reader/aria.md}}) — platform patterns
+
+Skip this step entirely when the `.md` has no slot insertions.
 
 ### Step 2: Verify MCP Connection
 
-If a Figma link is provided, read `mcpProvider` from `uspecs.config.json` and verify the connection:
+Read `mcpProvider` from `uspecs.config.json` and verify the connection (rendering requires a live Figma session):
 
 **If `figma-console`:**
 - `figma_get_status` — Confirm Desktop Bridge plugin is active
@@ -89,277 +125,46 @@ Read the file `uspecs.config.json` and extract:
 If the template key is empty, tell the user:
 > The screen reader template key is not configured. Run {{skill:firstrun}} with your Figma template library link first.
 
-### Step 4: Gather Context
+### Step 4: Build render inputs from the parsed `.md` (no extraction)
 
-Use ALL available sources to maximize context:
+Everything the render scripts need is already in the `.md` you parsed in Step 0. Assemble the render inputs directly — there is **no extraction call** here (see the FORBIDDEN directive in Step 0).
 
-**From user:**
-- Any screenshots or images provided
-- Component description and context
-- Specific states or variants to document
+Build these values:
 
-**From MCP tools (when Figma link provided):**
-1. `figma_navigate` — Open the component URL
-2. `figma_take_screenshot` — Capture the component visually
-3. `figma_get_file_data` — Get component structure, variants, and states
-4. `figma_get_component_for_development` — Get component data with visual reference (if nodeId known)
-5. `figma_search_components` — Find component by name if URL points to a page rather than specific component
+- **`GUIDELINES`** — the Voice section's guidelines blockquote, verbatim.
+- **`SECTIONS` (per entry)** — for each `### State: {name}`, the array of 3 platform sections, each `{ title, tables: [{ name, announcement, focusOrderIndex, properties: [{property, value, notes}] }] }`, copied verbatim from the parsed per-state platform tables. For the Focus Order entry, `SECTIONS = [{ title: "Focus order", tables: <focus-order tables> }]`.
+- **`COMP_SET_ID`** — `render-meta.component.compSetNodeId`.
+- **`BOOLEAN_DEFS`** — reshape `render-meta.booleanDefs[]` → `{ [key]: default }` (raw component-property keys; see Step 0.4).
+- **`FOCUS_STOPS` (per entry)** — built from the `voice-render-meta` carry. For the Focus Order entry, all `focusStops[]`. For a per-state entry, the subset whose `name` appears as a `#####` table in that state (match by part name). Each stop is `{ index: focusOrderIndex, name: layerName, slotIndex }` — **`name` is the carry's `layerName`**, because `findStopNode` matches `node.name === stop.name`. Skip a stop entirely when its `layerName` is `null` (no backing node → no marker).
+- **`SLOT_INSERTIONS` (per entry)** — from the parsed `### Slot insertions` prose: `{ slotName, componentNodeId, nestedOverrides?, textOverrides? }`. Resolve `componentNodeId` against `render-meta.slotContents[].preferredComponents[].componentId` when the prose carries a name instead of an id. Use `[]` when the default slot content already realizes the documented stops.
 
-**Extract structural data (when Figma link provided):**
+`VARIANT_PROPS` is derived in Step 5.
 
-Extract the node ID from the URL: Figma URLs contain `node-id=123-456` → use `123:456`.
+> The legacy "gather context + run the `extractElement`/`extractChildren` extraction script" flow has been **removed**. Do not reintroduce it. The `.md` + `render-meta` are the complete input.
 
-Run this extraction script via `figma_execute`, replacing `TARGET_NODE_ID` with the actual node ID:
+### Step 5: Re-derive per-entry variant props (light reasoning)
 
-```javascript
-const TARGET_NODE_ID = '__NODE_ID__';
+`VARIANT_PROPS` is the only value not copied verbatim from the `.md` — it is cheaply re-derived (no Figma reads):
 
-async function extractElement(node, index, artworkAbsX, artworkAbsY) {
-  const absX = node.absoluteTransform[0][2];
-  const absY = node.absoluteTransform[1][2];
-  return {
-    index,
-    name: node.name,
-    nodeType: node.type,
-    visible: node.visible,
-    bbox: {
-      x: Math.round(absX - artworkAbsX),
-      y: Math.round(absY - artworkAbsY),
-      w: Math.round(node.width),
-      h: Math.round(node.height)
-    }
-  };
-}
+- **Per-state entry.** Match the `### State: {name}` title to `render-meta.variantAxes` (case-insensitive option match). When the state name matches an option on an axis, set that axis to the matching value and leave the other axes at `variantAxesDefaults`. When there is no match (behavioral state like "focused"), use `variantAxesDefaults` verbatim. This mirrors the old Step 5F mapping, but reads axes from `render-meta` instead of a live walk.
+- **Focus Order entry.** Pick the variant that shows the most focus stops: choose the state whose per-state platform tables contain the most focus-stop tables, and map its name to `variantAxes` as above. The render script's boolean-enable + `SLOT_INSERTIONS` + richest-variant fallback remain the safety nets — `VARIANT_PROPS` is the primary lever. Never pass `{}` and rely solely on the fallback.
 
-async function resolvePreferredComponents(slotPropDefs, variant) {
-  const allCompKeys = new Map();
-  if (!Object.values(slotPropDefs).some(def => def.preferredValues && def.preferredValues.length > 0)) {
-    return allCompKeys;
-  }
-  for (const page of figma.root.children) {
-    try { await figma.setCurrentPageAsync(page); } catch { continue; }
-    const comps = page.findAll(n => n.type === 'COMPONENT' || n.type === 'COMPONENT_SET');
-    for (const comp of comps) {
-      if (comp.key) allCompKeys.set(comp.key, comp);
-      if (comp.type === 'COMPONENT_SET' && 'children' in comp) {
-        for (const child of comp.children) {
-          if (child.type === 'COMPONENT' && child.key) allCompKeys.set(child.key, child);
-        }
-      }
-    }
-  }
-  let p = variant;
-  while (p.parent && p.parent.type !== 'DOCUMENT') p = p.parent;
-  if (p.type === 'PAGE') await figma.setCurrentPageAsync(p);
-  return allCompKeys;
-}
+There is no Step 6 — the spec content (guidelines, announcements, property rows, focus order, slot scenarios) is already authored in the `.md` and assembled in Step 4. Do not re-run merge analysis or re-author announcements.
 
-const node = await figma.getNodeByIdAsync(TARGET_NODE_ID);
-if (!node || (node.type !== 'COMPONENT_SET' && node.type !== 'COMPONENT')) {
-  return { error: 'Node is not a component set or component. Type: ' + (node ? node.type : 'null') };
-}
+### Step 7: Audit the assembled render inputs
 
-const isComponentSet = node.type === 'COMPONENT_SET';
-const variant = isComponentSet ? (node.defaultVariant || node.children[0]) : node;
-const absX = variant.absoluteTransform[0][2];
-const absY = variant.absoluteTransform[1][2];
+Before rendering, verify the inputs you built from the `.md`:
+- Every per-state entry has exactly 3 platform sections titled `"VoiceOver (iOS)"`, `"TalkBack (Android)"`, `"ARIA (Web)"`, copied verbatim from the `.md`.
+- Every focus-stop table carries a `focusOrderIndex` and an `announcement` row, matching the `.md`.
+- Every `FOCUS_STOPS[].name` equals a `layerName` from the `voice-render-meta` carry (never a human part name). Stops with `layerName: null` are excluded.
+- `COMP_SET_ID`, `BOOLEAN_DEFS`, and any `SLOT_INSERTIONS` come from `render-meta` / parsed prose — not from any live read.
+- You did NOT run an extraction/tree-walk (see Step 0 FORBIDDEN).
 
-const elements = [];
-let idx = 1;
-
-const rootEl = await extractElement(variant, idx++, absX, absY);
-rootEl.name = node.name;
-elements.push(rootEl);
-
-let childContainer = variant;
-if (variant.children.length === 1 && variant.children[0].type === 'FRAME' && variant.children[0].layoutMode !== 'NONE') {
-  childContainer = variant.children[0];
-}
-if (childContainer.children.length === 1 && childContainer.children[0].type === 'SLOT') {
-  childContainer = childContainer.children[0];
-}
-
-async function extractChildren(container, artAbsX, artAbsY) {
-  for (const child of container.children) {
-    if (child.type === 'SLOT') {
-      await extractChildren(child, artAbsX, artAbsY);
-      continue;
-    }
-    const childSubs = child.children ? child.children.filter(c => c.type === 'INSTANCE') : [];
-    if (childSubs.length > 1 && childSubs.every(c => c.name === childSubs[0].name)) {
-      let slotIdx = 0;
-      for (const slotChild of child.children) {
-        const el = await extractElement(slotChild, idx++, artAbsX, artAbsY);
-        el.slotIndex = slotIdx++;
-        elements.push(el);
-      }
-    } else {
-      elements.push(await extractElement(child, idx++, artAbsX, artAbsY));
-    }
-  }
-}
-await extractChildren(childContainer, absX, absY);
-
-const propDefs = node.componentPropertyDefinitions || {};
-const variantAxes = [];
-const slotPropDefs = {};
-const slotDefs = [];
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  if (def.type === 'VARIANT') {
-    const cleanKey = rawKey.split('#')[0];
-    variantAxes.push({
-      name: cleanKey,
-      options: def.variantOptions || [],
-      defaultValue: def.defaultValue
-    });
-  } else if (def.type === 'SLOT') {
-    slotPropDefs[rawKey] = def;
-  }
-}
-
-const booleanDefs = {};
-for (const [rawKey, def] of Object.entries(propDefs)) {
-  if (def.type === 'BOOLEAN') booleanDefs[rawKey] = def.defaultValue;
-}
-
-const resolvedPreferred = await resolvePreferredComponents(slotPropDefs, variant);
-const slotVisibility = {};
-const slotNodes = variant.findAll(n => n.type === 'SLOT');
-for (const sn of slotNodes) {
-  const cpRefs = sn.componentPropertyReferences || {};
-  const slotDefEntry = Object.entries(slotPropDefs).find(([rawKey]) => rawKey.split('#')[0] === sn.name);
-  const matchedDef = slotDefEntry ? slotDefEntry[1] : null;
-  const preferredInstances = [];
-  if (matchedDef && matchedDef.preferredValues) {
-    for (const pv of matchedDef.preferredValues) {
-      if (pv.type !== 'COMPONENT') continue;
-      const compNode = resolvedPreferred.get(pv.key);
-      if (!compNode) continue;
-      const isSet = compNode.parent && compNode.parent.type === 'COMPONENT_SET';
-      preferredInstances.push({
-        componentKey: pv.key,
-        componentName: compNode.name,
-        componentId: compNode.id,
-        isComponentSet: isSet,
-        componentSetId: isSet ? compNode.parent.id : null,
-        componentSetName: isSet ? compNode.parent.name : compNode.name
-      });
-    }
-  }
-  const defaultChildren = [];
-  if ('children' in sn && sn.children.length > 0) {
-    for (const child of sn.children) {
-      const childInfo = { name: child.name, nodeType: child.type, visible: child.visible };
-      if (child.type === 'INSTANCE') {
-        try {
-          const mc = await child.getMainComponentAsync();
-          if (mc) {
-            childInfo.mainComponentId = mc.id;
-            childInfo.mainComponentKey = mc.key;
-            const isSet = mc.parent && mc.parent.type === 'COMPONENT_SET';
-            childInfo.componentSetName = isSet ? mc.parent.name : mc.name;
-            childInfo.componentSetId = isSet ? mc.parent.id : null;
-            childInfo.isComponentSet = isSet;
-            const contextualOverrides = {};
-            if (child.componentProperties) {
-              for (const [k, v] of Object.entries(child.componentProperties)) {
-                contextualOverrides[k.split('#')[0]] = v.value;
-              }
-            }
-            childInfo.contextualOverrides = contextualOverrides;
-          }
-        } catch {}
-      }
-      defaultChildren.push(childInfo);
-    }
-  }
-  const slotCleanName = sn.name;
-  const visibleRawKey = cpRefs.visible || null;
-  if (visibleRawKey) slotVisibility[slotCleanName] = visibleRawKey;
-  slotDefs.push({
-    propName: slotCleanName,
-    rawKey: slotDefEntry ? slotDefEntry[0] : slotCleanName,
-    description: matchedDef && matchedDef.description ? matchedDef.description : '',
-    visibleRawKey,
-    visiblePropName: visibleRawKey ? visibleRawKey.split('#')[0] : null,
-    preferredInstances,
-    defaultChildren
-  });
-}
-
-return {
-  componentName: node.name,
-  compSetNodeId: TARGET_NODE_ID,
-  isComponentSet,
-  elements,
-  variantAxes,
-  booleanDefs,
-  slotDefs,
-  slotVisibility
-};
-```
-
-Save the returned JSON — you will use `componentName`, `compSetNodeId`, `elements`, `variantAxes`, `booleanDefs`, `slotDefs`, and `slotVisibility` in subsequent steps. The `elements` array provides structural data for merge analysis and bounding box geometry for positioning focus order markers. The extraction script deep-recurses into SLOT nodes — when a child is `type === 'SLOT'`, the script walks into it and extracts its children directly, so interactive elements inside slots (e.g., 2 buttons in a slot) appear as separate entries for merge analysis. When a child container holds multiple identically-named INSTANCE children (composable slots), the script recurses into the slot and extracts each child individually with a `slotIndex` field for index-based matching — consistent with the anatomy skill's approach. The `variantAxes` array lists each variant property axis with its options and default value — used in Step 5F to map states to variant properties. The `booleanDefs` object maps each boolean property key to its default value — used in Step 10–11 to force-enable boolean-gated elements on the Focus Order artwork. The `slotDefs` array now carries the slot's raw key, description, boolean visibility binding, resolved `preferredInstances`, and `defaultChildren` metadata from the default variant. Use this to decide whether focus order should document the default slot content or a representative interactive preferred fill. The `slotVisibility` object still maps slot node names to their controlling boolean property key for quick conditional-focus-stop checks.
-
-### Step 5: List Visual Parts and Run Merge Analysis
-
-Using gathered context, identify:
-
-**A. List all visual parts** per the instruction file (Step 1).
-
-**B. Merge analysis — determine what gets focus vs. what merges:**
-Run the merge analysis from the instruction file (Step 2) to classify each visual part as: focus stop, merged into parent, live region, or decorative.
-
-**C. Count actual focus stops** — this determines whether `focusOrder` is needed (2+ stops) or not (1 stop).
-
-**D. Grouping structure:** Apply the diagnostic questions from the instruction file. Does a container need its own semantics?
-
-**E. States:** List all states to document. Note if focus order changes between states (e.g., error state adds a live region).
-
-**E-bis. State grouping — collapse states with identical accessibility semantics:**
-
-Filter variant axes using the `A11Y_AXES` pattern `/state|mode|interaction/i` to identify axes that may affect accessibility semantics (skip purely visual axes like Size, Shape, Theme). Then apply the state-grouping rules from the instruction file (Step 4) to collapse states with identical screen reader behavior and keep states with unique accessibility semantics separate.
-
-**E-ter. Behavioral states from user context:** Identify behavioral states per the instruction file (Step 4). Map each to default variant props since they don't correspond to a Figma axis.
-
-**E-quater. Slot scenario selection:** When a focus stop lives inside slot content, decide whether the documented scenario should use the slot's default child content or a preferred interactive fill. Use the extracted `slotDefs` to inspect `defaultChildren`, `preferredInstances`, and `visiblePropName`. If the default slot content already exposes the documented focus stop, prefer that concrete configuration. If the focus stop only exists when the slot is populated with a different interactive component, choose a representative preferred instance and record a slot insertion plan for the focus-order entry and any affected states.
-
-**F. State-to-variant mapping:** Using the `variantAxes` from extraction, map each documented state to a set of variant property key-value pairs. Match state names to variant axis options (case-insensitive). When a state name matches an option on a variant axis, set that axis to the matching value and leave other axes at their defaults. When no match is found (e.g., the state is behavioral like "focused" rather than a Figma variant), use the default variant properties. Save this mapping as `stateVariantProps` — a dict from state name to `{ [axisName]: value }`. In parallel, carry `slotInsertions` into any state objects that need slot population beyond the default content.
-
-### Step 6: Generate Structured Data
-
-Do NOT output JSON to the user. All data flows directly into Figma template placeholders via `figma_execute`.
-
-Follow the schema in the instruction file. Build the data as a structured object with:
-- `componentName`: string
-- `guidelines`: string (general accessibility guidelines for this component)
-- `focusOrder`: object (optional, only when 2+ focus stops), with `title`, `description` (optional), `tables` array, and optional `slotInsertions`
-- `states`: array, each with:
-  - `state`: string (e.g., "enabled", "disabled")
-  - `description`: string (optional)
-  - `variantProps`: `Record<string, string>` — variant axis values for this state's preview (from `stateVariantProps`)
-  - `slotInsertions`: `SlotInsertion[]` (optional) — slot population plan for this state's preview when the documented focus stops depend on non-default slot content
-  - `sections`: array (3 platform sections), each with:
-    - `title`: string (exact: `"VoiceOver (iOS)"`, `"TalkBack (Android)"`, `"ARIA (Web)"`)
-    - `tables`: array (one per focus stop / component part), each with:
-      - `name`: string (part/object name)
-      - `announcement`: string (what the screen reader says)
-      - `properties`: array, each with `property`, `value`, `notes`
-
-`SlotInsertion` follows the same mutation-ordering rule used by the API skill: `{ slotName, componentNodeId, nestedOverrides?, textOverrides? }`. `componentNodeId` may point to a local `COMPONENT` or `COMPONENT_SET`; when it is a set, instantiate its default variant (or first child). Apply all overrides to the inserted child **before** `appendChild` into the slot.
-
-### Step 7: Audit
-
-Re-read the instruction file, focusing on:
-- **Validation Checklist** — walk through the pre-render structured-data checks first, then the rendered-preview checks after artwork generation
-- **Common Mistakes** section (especially: listing merged parts as focus stops, confusing visual parts with focus stops)
-- Section title formatting (exact: `"Focus order"`, `"VoiceOver (iOS)"`, `"TalkBack (Android)"`, `"ARIA (Web)"`)
-
-Check your output against each rule. Fix any violations.
+Fix any mismatch by re-parsing the `.md` — never by re-extracting from Figma.
 
 ### Step 8: Import and Detach Template
 
-Run via `figma_execute` (replace `__SCREEN_READER_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with the node ID extracted from the component URL):
+Run via `figma_execute` (replace `__SCREEN_READER_TEMPLATE_KEY__`, `__COMPONENT_NAME__`, and `__COMPONENT_NODE_ID__` with `COMP_SET_ID` = `render-meta.component.compSetNodeId`):
 
 ```javascript
 const TEMPLATE_KEY = '__SCREEN_READER_TEMPLATE_KEY__';
@@ -433,7 +238,7 @@ First, build the full list of entries to render:
 1. **Focus order** (if present, `focusOrder.tables.length > 0`): rendered as the first `#state-template` clone with title "Focus order"
 2. **Each state**: rendered as a `#state-template` clone with title "{ComponentName} {state}"
 
-For each entry, run via `figma_execute`. Replace all `__PLACEHOLDER__` values. Set `RENDER_ARTWORK` to `true` when extraction data is available (Figma link input), or `false` for screenshot-only input:
+For each entry, run via `figma_execute`. Replace all `__PLACEHOLDER__` values. `RENDER_ARTWORK` is always `true` (this skill always has the `.md` + `render-meta`):
 
 ```javascript
 const FONT_FAMILY = '__FONT_FAMILY__';
@@ -1009,27 +814,27 @@ return { success: true };
 
 Every table in every section must have a `focusOrderIndex` — the reading order position (1, 2, 3…). Tables within each platform section are listed in focus traversal order, so the index matches the table's position in that section. For single-stop components, all tables have `focusOrderIndex: 1`.
 
-For the focus order (if present):
+For the focus order (if present in the `.md`):
 - `ENTRY_TITLE` = `"Focus order"`
-- `ENTRY_DESCRIPTION` = focus order description (or empty)
-- `SECTIONS` = `[{ title: focusOrder.title, tables: focusOrder.tables }]`
-- `FOCUS_STOPS` = all focus stops from the component's focus order tables
-- `VARIANT_PROPS` = for the Focus Order entry, set this to the variant that naturally shows the most focus stops. Use the merge analysis (which identifies conditional focus stops and their triggering states) and the `variantAxes` from extraction to select the variant — e.g., for a text field where the clear button only appears in Active-typing, use `{"State": "Active-typing"}`. Do NOT pass `{}` and rely solely on the fallback. The boolean-enable step, slot insertion step, and richest-variant fallback in the rendering script are safety nets, not the primary mechanism. If the documented focus stop only exists when a slot is populated with a different component, pair `VARIANT_PROPS` with `focusOrder.slotInsertions` for that representative scenario. If no single variant + slot configuration shows all stops, use the state with the most stops and note which stops are missing in the spec.
+- `ENTRY_DESCRIPTION` = the parsed focus-order description (or empty)
+- `SECTIONS` = `[{ title: "Focus order", tables: <focus-order tables parsed from the .md> }]`
+- `FOCUS_STOPS` = all focus stops from the `voice-render-meta` carry (`name` = each stop's `layerName`)
+- `VARIANT_PROPS` = the variant that naturally shows the most focus stops, re-derived in Step 5 (the focus-stop-richest state mapped to `render-meta.variantAxes`). Do NOT pass `{}` and rely solely on the fallback. The boolean-enable step, slot insertion step, and richest-variant fallback in the rendering script are safety nets, not the primary mechanism. If the documented focus stop only exists when a slot is populated with a different component, pair `VARIANT_PROPS` with the parsed `SLOT_INSERTIONS` for that scenario. If no single variant + slot configuration shows all stops, use the state with the most stops; the `.md` already notes any unreachable stops.
 For each state:
 - `ENTRY_TITLE` = `"__COMPONENT_NAME__ __STATE__"` (e.g., "Button enabled")
-- `ENTRY_DESCRIPTION` = state description (or empty)
-- `SECTIONS` = the state's sections array (3 platform sections)
-- `FOCUS_STOPS` = same focus stops as the focus order entry, unless the state changes the focus order (e.g., error state adds/removes elements — adjust accordingly). For states where the component is entirely removed from the focus order (e.g., Disabled), set `FOCUS_STOPS = []` — the artwork will still render the component preview but without markers, outlines, or connecting lines.
-- `VARIANT_PROPS` = `stateVariantProps[state]` from Step 5F (the variant axis values that switch the preview instance to this state's variant). Per-state previews do **not** auto-enable every boolean the way the Focus Order entry does, so include the state's visibility-driving properties here when they matter to the preview.
-- `SLOT_INSERTIONS` = `focusOrder.slotInsertions` for the Focus Order entry, or `state.slotInsertions` for per-state entries. Use `[]` when the default slot content already matches the documented focus stops.
+- `ENTRY_DESCRIPTION` = the parsed state description (or empty)
+- `SECTIONS` = the state's 3 platform sections parsed from the `.md`
+- `FOCUS_STOPS` = the focus stops present in this state — the subset of the `voice-render-meta` carry whose `name` appears as a `#####` table in the state (`name` = `layerName`). For states where the component is entirely removed from the focus order (e.g., Disabled, documented in the `.md` with zero focus-stop tables), set `FOCUS_STOPS = []` — the artwork still renders the preview without markers, outlines, or connecting lines.
+- `VARIANT_PROPS` = the per-state mapping from Step 5 (state name → `render-meta.variantAxes`, else `variantAxesDefaults`). Per-state previews do **not** auto-enable every boolean the way the Focus Order entry does, so include the state's visibility-driving properties here when they matter to the preview.
+- `SLOT_INSERTIONS` = the parsed `### Slot insertions` entries that apply to this entry. Use `[]` when the default slot content already matches the documented focus stops.
 **Artwork parameters:**
 - `FONT_FAMILY` = the `fontFamily` value from `uspecs.config.json` (default: `Inter`)
-- `RENDER_ARTWORK` = `true` when extraction data is available (Figma link input), `false` for screenshot-only input
-- `COMP_SET_ID` = `compSetNodeId` from extraction (set to `''` when `RENDER_ARTWORK` is `false`)
-- `FOCUS_STOPS` = array of `{ index, name, slotIndex?, bbox: {x, y, w, h} }` built from extraction `elements` — use only names that appear in the extraction output. Do not invent deeply nested node names that are not in the extracted `elements` array; `findStopNode` resolves by name match and will fail silently on names that don't exist. `slotIndex` is present when the element was extracted from a slot container with identically-named siblings — used for index-based matching consistent with anatomy. Set to `[]` when `RENDER_ARTWORK` is `false`.
-- `VARIANT_PROPS` = variant axis values for this entry. For the Focus Order entry, use the variant showing the most focus stops (see guidance above). For per-state entries, use `stateVariantProps[state]`. Set to `{}` when `RENDER_ARTWORK` is `false`.
-- `BOOLEAN_DEFS` = `booleanDefs` from extraction (set to `{}` when `RENDER_ARTWORK` is `false`)
-- `SLOT_INSERTIONS` = array of `{ slotName, componentNodeId, nestedOverrides?, textOverrides? }`. `componentNodeId` may refer to a local component or component set. Use this when a documented focus stop depends on preferred slot content rather than the default slot children. All overrides must be applied before `appendChild` into the slot. Set to `[]` when `RENDER_ARTWORK` is `false` or no slot population is needed.
+- `RENDER_ARTWORK` = always `true` — this skill always has the `.md` + `render-meta` (there is no screenshot-only path).
+- `COMP_SET_ID` = `render-meta.component.compSetNodeId`
+- `FOCUS_STOPS` = array of `{ index, name, slotIndex? }` built from the `voice-render-meta` carry, where **`name` is the carry's `layerName`** — `findStopNode` resolves by `node.name === stop.name`, so a human part name will fail silently. `slotIndex` comes from the carry (present for composable-slot siblings). The render script reads each stop's live `bbox` itself; you do not supply bbox. Exclude stops whose `layerName` is `null`.
+- `VARIANT_PROPS` = variant axis values for this entry, from Step 5 (focus-order: richest state; per-state: the state mapping).
+- `BOOLEAN_DEFS` = `render-meta.booleanDefs[]` reshaped to `{ [key]: default }` (raw component-property keys).
+- `SLOT_INSERTIONS` = array of `{ slotName, componentNodeId, nestedOverrides?, textOverrides? }` parsed from the `### Slot insertions` block (resolve `componentNodeId` via `render-meta.slotContents` when needed). All overrides must be applied before `appendChild` into the slot. Set to `[]` when no slot population is needed.
 - `IS_FOCUS_ORDER_ENTRY` = `true` for the Focus Order entry, `false` for per-state entries
 
 ### Step 12: Visual Validation
@@ -1048,11 +853,12 @@ For each state:
    - Connecting lines link markers to their target elements
    - Dashed outlines surround each focus stop in the artwork
    - Artwork preview text is updated through the same `textOverrides` and `slotInsertions` choices used to build the documented scenario (no stray "Label" placeholders)
-3. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
+3. **Focus-stop resolution check (required).** Every documented focus stop (each `FOCUS_STOPS[]` entry with a non-null `layerName`) MUST have resolved a live `bbox` during render — i.e., `findStopNode` found a node named `layerName` and a marker + dashed outline were drawn for it. If any documented stop did not resolve (missing marker/outline), the `layerName` carry is wrong or the chosen `VARIANT_PROPS`/`SLOT_INSERTIONS` did not surface it. Fix by adjusting `VARIANT_PROPS`/`SLOT_INSERTIONS` (or, if the `.md`'s `layerName` is itself wrong, flag it — re-run `create-component-md`); do NOT silently ship a spec with an unmarked focus stop.
+4. If issues are found, fix via `figma_execute` and re-capture (up to 3 iterations)
 
 ### Step 13: Completion Link
 
-Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (extracted from the user's input URL) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID:
+Print a clickable Figma URL to the completed spec in chat. Construct the URL from the `fileKey` (`render-meta.fileKey`) and the `frameId` (returned by Step 8), replacing `:` with `-` in the node ID:
 
 ```
 Screen reader spec complete: https://www.figma.com/design/{fileKey}/?node-id={frameId}
@@ -1061,24 +867,25 @@ Screen reader spec complete: https://www.figma.com/design/{fileKey}/?node-id={fr
 ## Notes
 
 - The screen reader template key is stored in `uspecs.config.json` under `templateKeys.screenReader` and is configured via {{skill:firstrun}}.
-- The target node can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant). The extraction script detects the type and returns `isComponentSet` accordingly. When the node is a standalone component, it is used directly for element extraction and artwork rendering.
+- **This skill consumes the component `.md`** (the source of truth produced by {{skill:create-component-md}}) and renders its Voice section into Figma. It does NOT extract from Figma — see the Step 0 FORBIDDEN directive. The `compSetNodeId`, variant axes, boolean defs, slot contents, and per-focus-stop layer names all come from the `.md`'s `render-meta` + `voice-render-meta` carry.
+- The target node referenced by `render-meta.component.compSetNodeId` can be either a `COMPONENT_SET` (multi-variant) or a standalone `COMPONENT` (single variant); the render script handles both via `defaultVariant || children[0]`.
 - Four-level cloning: state → platform section → table → property row. Each level is cloned from its respective template (`#state-template` → `#section` → `#state-table` → `#prop-row-template`), filled, and the original template removed.
 - The guidelines frame is found by name (`{screen-reader-general-guidelines}`), not by content search. This is handled in Step 9.
 - Focus order is rendered as the first `#state-template` clone with title "Focus order". It contains a single section with the focus order tables. Regular states follow after.
 - Each state entry is rendered in a single unified `figma_execute` call (Step 10–11) that handles both table rendering and artwork rendering. This avoids the previous pattern of requiring the agent to manually splice separate artwork code into each state call.
 - **Markers per state, not global**: Unlike anatomy which has one artwork, voice renders markers inside each state's `Preview placeholder`. This is correct because focus order can change between states (e.g., error state might add/remove elements). Markers are rendered for every state that has at least one focus stop, even single-stop components — the number shows reading order position. For states where the component is removed from the focus order (e.g., Disabled), pass `FOCUS_STOPS = []` so only the component preview is rendered without markers, outlines, or connecting lines.
-- The `RENDER_ARTWORK` flag controls whether artwork is generated. Set to `true` when extraction data is available (Figma link input), `false` for screenshot-only input. When `false`, the `COMP_SET_ID` and `FOCUS_STOPS` parameters are ignored.
-- The extraction script in Step 4 is a lightweight version of anatomy's extraction — it captures child names, types, and bounding boxes for marker positioning without extracting fills, tokens, or typography. It deep-recurses into SLOT nodes to extract their children individually, so interactive elements inside slots appear as separate entries for merge analysis. It also reads SLOT property definitions, resolves `preferredValues` to local component nodes, records default slot children, and reads boolean visibility bindings (`slotVisibility`) so the agent can distinguish between default slot content and representative interactive slot fills.
+- The `RENDER_ARTWORK` flag is always `true` for this skill (there is no screenshot-only path). `COMP_SET_ID` and `FOCUS_STOPS` always come from the `.md` + `render-meta` / `voice-render-meta` carry.
+- **Focus stop layer names come from the producer.** `extract-voice` retains each focus stop's Figma `treeFlat` layer name and `create-component-md` projects it into the Voice body's hidden `voice-render-meta` carry. `FOCUS_STOPS[].name` MUST be that `layerName` so `findStopNode` (which matches `node.name === stop.name`) resolves exactly. This replaces the old in-skill extraction that read live `elements[].name`.
 - Preview-content changes should use the same mechanisms the render script understands: direct text updates on the main instance where needed, plus `slotInsertions` for slot-hosted content. Do not model preview content with a separate `artworkLabels` field.
 - **Dynamic preview sizing**: The `Preview placeholder` keeps its template auto-layout. An inner wrapper frame (`layoutMode = 'NONE'`, `clipsContent = true`, transparent fills) is created and appended as an auto-layout child. The wrapper **width** is read from `previewPlaceholder.width` so it matches the template's layout width — this prevents the wrapper from blowing out the spec frame horizontally. The wrapper **height** is computed dynamically from the component height plus marker room (`rootH + 2 * sideRoom`), with a 200px floor to prevent collapse on tiny components. The component instance, outlines, markers, and lines are all placed inside the wrapper using absolute coordinates, while the template auto-layout controls the wrapper's position within the overall spec. This eliminates the stale `ROOT_SIZE` centering problem — `compX`/`compY` are calculated from live rendered dimensions. The sizing formula uses uniform `markerPadding` on all four sides based on `Math.ceil(stopCount / 4) * (MARKER_SIZE + COLLISION_GAP)`.
 - **Marker positioning** uses the **nearest-edge + collision avoidance** algorithm (same as anatomy). For each focus stop, score all four sides by distance from the element's edge to the component boundary, then pick the shortest. Before placing, check overlap with all already-placed markers (8px minimum gap). If overlap, apply perpendicular offset; if offset exceeds bounds, try next-best side. Connectors are always straight lines from the marker to the element's nearest edge.
 - After all state entries are rendered, both `#marker-example` and `#state-template` are hidden in a single cleanup call.
 - The table header row uses `#focus-order` (280px) and `#announcement` (1120px) columns inside `#header-row`. The `#focus-order` column shows the reading order number (`focusOrderIndex`), and `#announcement` shows the part name + full announcement combined (e.g., "Button \"Submit, button\"").
-- The instruction file (`{{ref:screen-reader/agent-screenreader-instruction.md}}`) and platform reference files contain the schema, merge analysis rules, and platform-specific patterns. The AI reasoning for merge analysis and announcement generation is unchanged — only the delivery mechanism has changed.
+- The instruction file (`{{ref:screen-reader/agent-screenreader-instruction.md}}`) and platform reference files are now consulted **only** for slot-scenario reasoning. Merge analysis, focus-stop counting, and announcement authoring already happened in `extract-voice` and are baked into the `.md` — this skill does not redo them.
 - **Font loading for component instances**: The Step 10–11 rendering script uses `loadAllFonts(rootNode)` to load all fonts from a component instance's text nodes. This is called after `createInstance()` and after each `setProperties()` call (which may reveal hidden text nodes with different fonts). The `loadAllFonts` pattern reads `tn.fontName` from each text node (guarding against `figma.mixed`) rather than guessing font style names — per the Figma MCP server guide, font style names are file-dependent and must be discovered, not hardcoded.
 - Variant properties are applied via `setProperties()` after instance creation; the `try/catch` handles behavioral states (e.g., "focused") that don't map to a Figma variant.
 - Bounding boxes are captured from the live instance (no `detachInstance()` is ever called in artwork rendering — instances stay live throughout). For the Focus Order entry, `findStopNode` uses ancestor-aware visibility matching (`visibleOnly: true`) that walks the parent chain to confirm the node and all its ancestors are visible — this ensures the richest-variant fallback triggers when boolean-enable alone cannot surface all focus stops.
-- For the Focus Order entry, focus stop visibility is maximized in four steps: (1) the agent sets `VARIANT_PROPS` to a variant where all focus stops are naturally visible; (2) all boolean properties from `booleanDefs` are force-enabled via `setProperties`; (3) any required `SLOT_INSERTIONS` are applied so slot-hosted interactive content actually exists in the preview; (4) `findStopNode` uses ancestor-aware visibility (`isEffectivelyVisible` walks the parent chain), so elements hidden by a parent container correctly report as unresolved — if unresolved stops remain, the richest-variant fallback iterates all variants, reapplies slot insertions, selects the best, resizes the wrapper, and re-centers. Per-state entries use `visibleOnly: false` and skip the fallback entirely.
+- For the Focus Order entry, focus stop visibility is maximized in four steps: (1) the agent sets `VARIANT_PROPS` to a variant where all focus stops are naturally visible (re-derived in Step 5 from `render-meta.variantAxes`); (2) all boolean properties from `BOOLEAN_DEFS` (= `render-meta.booleanDefs[]`) are force-enabled via `setProperties`; (3) any required `SLOT_INSERTIONS` are applied so slot-hosted interactive content actually exists in the preview; (4) `findStopNode` uses ancestor-aware visibility (`isEffectivelyVisible` walks the parent chain), so elements hidden by a parent container correctly report as unresolved — if unresolved stops remain, the richest-variant fallback iterates all variants, reapplies slot insertions, selects the best, resizes the wrapper, and re-centers. Per-state entries use `visibleOnly: false` and skip the fallback entirely.
 - **Focus stop outlines**: Pink dashed rectangles (`dashPattern = [4, 4]`, `strokeWeight = 1`, `MARKER_COLOR`) are drawn around each focus stop's bounding box in the artwork. These use the same values as the anatomy skill for cross-skill visual consistency.
-- **SLOT and composable slot handling**: The extraction script handles both native Figma SLOT nodes (`type === 'SLOT'`) and the composable-slot pattern (multiple identically-named INSTANCE children that together act as a slot). For native SLOTs, the `extractChildren` helper deep-recurses — when a child is `type === 'SLOT'`, it walks into the SLOT's children instead of extracting the SLOT itself. This ensures interactive elements inside a SLOT (e.g., 2 buttons) appear as separate entries for merge analysis. The extracted `slotDefs` tell you whether those children come from the default content or whether you should use a preferred interactive fill. During artwork rendering, `SLOT_INSERTIONS` populate the chosen preferred content before bbox capture, and all nested overrides/text overrides are applied before `appendChild` to avoid compound-ID mutation issues. For the composable-slot pattern, when a child container holds multiple identically-named INSTANCE children, the script recurses and extracts each child individually with a `slotIndex` field. The `findStopNode` helper uses `slotIndex` for index-based matching (consistent with anatomy's approach), falling back to name-based `findOne` for uniquely-named elements. Bbox capture from `findStopNode` always runs on the live instance, ensuring SLOT nodes and their children are intact.
-- **Behavioral states**: States driven by user-described configurations (single-select vs. multi-select, collapsed vs. expanded) that don't correspond to Figma variant axes are documented as separate entries with default variant props. The "Disabled" rule in Step 5E-bis applies to component-level disabled only — sub-component disabled is shown as an archetype within a behavioral state.
+- **SLOT and composable slot handling**: Focus stops inside SLOTs are resolved at render time by name-match on the live instance. The `voice-render-meta` carry supplies each stop's `layerName` (and `slotIndex` for composable-slot siblings — multiple identically-named INSTANCE children). `findStopNode` uses `slotIndex` for index-based matching, falling back to name-based `findOne` for uniquely-named elements. During artwork rendering, `SLOT_INSERTIONS` (parsed from the `.md`'s `### Slot insertions` block, resolved against `render-meta.slotContents`) populate the chosen preferred content before bbox capture, and all nested/text overrides are applied before `appendChild` to avoid compound-ID mutation issues. Bbox capture from `findStopNode` always runs on the live instance, ensuring SLOT nodes and their children are intact.
+- **Behavioral states**: States driven by user-described configurations (single-select vs. multi-select, collapsed vs. expanded) that don't correspond to Figma variant axes are documented in the `.md` as separate `### State:` entries; their `variantProps` resolve to `render-meta.variantAxesDefaults`. Component-level disabled renders with `FOCUS_STOPS = []`; sub-component disabled is shown as an archetype within a behavioral state.

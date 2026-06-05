@@ -61,6 +61,9 @@ export type Preview = {
   defaultVariantName: string;
   variantCount: number;
   children: PreviewChild[];
+  // Previously-entered Figma file link persisted on the document (setPluginData), so
+  // the UI can prefill the required link field on later runs in the same file.
+  savedFileLink: string | null;
 };
 
 export type UserClassification = {
@@ -89,6 +92,9 @@ export type BaseJsonMeta = {
   nodeId: string;
   componentSlug: string;
   optionalContext: string | null;
+  // Canonical Figma deep link to the extracted component, built from fileKey + the
+  // document name + nodeId. Null when no file key could be resolved.
+  figmaUrl: string | null;
   extractionSource: 'plugin';
   pluginVersion: string;
 };
@@ -105,5 +111,10 @@ export type MsgFromSandbox =
 // UI → Sandbox
 export type MsgFromUi =
   | { type: 'refresh-preview' }
-  | { type: 'extract'; classifications: UserClassification[]; optionalContext: string | null }
+  | {
+      type: 'extract';
+      classifications: UserClassification[];
+      optionalContext: string | null;
+      fileLink: string | null;
+    }
   | { type: 'close' };

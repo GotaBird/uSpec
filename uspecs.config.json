@@ -15,5 +15,5 @@
   "reconciliation": {
     "autoRetry": true
   },
-  "cliVersion": "0.2.8"
+  "cliVersion": "0.2.12"
 }

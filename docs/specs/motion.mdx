@@ -13,6 +13,10 @@ The motion skill documents a component's animation behavior — every animated p
 The motion spec currently only supports extraction from **After Effects**. Unlike other skills that work directly from a Figma link, this is a **two-step process**: first run the export script in After Effects to get the JSON data, then run the skill with that output.
 </Info>
 
+<Note>
+**Motion is outside the Component Markdown pipeline.** The other `create-*` skills now consume `components/<slug>.md` (produced by `create-component-md`) and render from its `render-meta`. `create-motion` is the one exception: its input is an After Effects timeline export, not a Figma component walk, so there is no `_base.json`, no `extract-motion` interpreter, and no Motion section in the `.md` to consume. It stays a standalone Figma renderer driven by the AE JSON.
+</Note>
+
 ## What you get
 
 <CardGroup cols={2}>
